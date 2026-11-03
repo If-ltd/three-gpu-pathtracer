@@ -4,9 +4,10 @@ import { ZeroOutKernel } from './compute/ZeroOutKernel.js';
 
 export class PathTracerBackend {
 
-	constructor( renderer ) {
+	constructor( renderer, { doubleBuffered = true } = {} ) {
 
 		this.renderer = renderer;
+		this.doubleBuffered = doubleBuffered;
 		this.maxBounces = 15;
 
 		// how much work a single update dispatches, in path slots. Lower values keep frames
@@ -114,11 +115,11 @@ export class PathTracerBackend {
 		this.sampleCountTarget.dispose();
 
 		this.outputTarget = this.outputTarget.clone();
-		this.prevOutputTarget = this.outputTarget.clone();
+		this.prevOutputTarget = this.doubleBuffered ? this.outputTarget.clone() : this.prevOutputTarget.clone();
 		this.sampleCountTarget = this.sampleCountTarget.clone();
 
 		this.outputTarget.setSize( w, h );
-		this.prevOutputTarget.setSize( w, h );
+		this.prevOutputTarget.setSize( this.doubleBuffered ? w : 1, this.doubleBuffered ? h : 1 );
 		this.sampleCountTarget.setSize( w, h );
 
 		this.reset();
@@ -193,8 +194,12 @@ export class PathTracerBackend {
 		outputTargetClearKernel.target = outputTarget;
 		renderer.compute( outputTargetClearKernel.kernel, dispatchSize );
 
-		outputTargetClearKernel.target = prevOutputTarget;
-		renderer.compute( outputTargetClearKernel.kernel, dispatchSize );
+		if ( this.doubleBuffered ) {
+
+			outputTargetClearKernel.target = prevOutputTarget;
+			renderer.compute( outputTargetClearKernel.kernel, dispatchSize );
+
+		}
 
 		sampleCountClearKernel.target = sampleCountTarget;
 		renderer.compute( sampleCountClearKernel.kernel, dispatchSize );

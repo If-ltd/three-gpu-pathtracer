@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { Matrix4, WebGPUCoordinateSystem } from 'three';
 import { uniform, PI } from 'three/tsl';
 import { wgslTagFn, rayStruct, ndcToCameraRay } from 'three-mesh-bvh/webgpu';
@@ -5,7 +6,7 @@ import { rand3, RNG_INDEX_APERTURE_SAMPLE } from '../nodes/random.wgsl.js';
 import { PhysicalCamera } from '../../objects/PhysicalCamera.js';
 
 // aperture sampling helpers
-const sampleCircle = wgslTagFn/* wgsl */`
+const sampleCircle = pipelineWgslTagFn(236)`
 	fn sampleCircle( uv: vec2f ) -> vec2f {
 
 		let angle = 2.0 * ${ PI } * uv.x;
@@ -15,7 +16,7 @@ const sampleCircle = wgslTagFn/* wgsl */`
 	}
 `;
 
-const sampleTriangle = wgslTagFn/* wgsl */`
+const sampleTriangle = pipelineWgslTagFn(237)`
 	fn sampleTriangle( a: vec2f, b: vec2f, c: vec2f, rIn: vec2f ) -> vec2f {
 
 		let e1 = a - b;
@@ -33,7 +34,7 @@ const sampleTriangle = wgslTagFn/* wgsl */`
 	}
 `;
 
-const sampleRegularPolygon = wgslTagFn/* wgsl */`
+const sampleRegularPolygon = pipelineWgslTagFn(238)`
 	fn sampleRegularPolygon( sidesIn: i32, uvw: vec3f ) -> vec2f {
 
 		let sides = max( sidesIn, 3 );
@@ -52,7 +53,7 @@ const sampleRegularPolygon = wgslTagFn/* wgsl */`
 `;
 
 // samples an aperture shape with the given number of blades. 0 means circle
-const sampleAperture = wgslTagFn/* wgsl */`
+const sampleAperture = pipelineWgslTagFn(239)`
 	fn sampleAperture( blades: i32, uvw: vec3f ) -> vec2f {
 
 		if ( blades == 0 ) {
@@ -68,7 +69,7 @@ const sampleAperture = wgslTagFn/* wgsl */`
 	}
 `;
 
-const rotateVector = wgslTagFn/* wgsl */`
+const rotateVector = pipelineWgslTagFn(240)`
 	fn rotateVector( v: vec2f, t: f32 ) -> vec2f {
 
 		let vc = cos( t );
@@ -91,7 +92,7 @@ PhysicalCamera.prototype.getCameraRayFn = function getCameraRayFn() {
 	const apertureRotation = uniform( 0 );
 	const anamorphicRatio = uniform( 1 );
 
-	const fn = wgslTagFn/* wgsl */`
+	const fn = pipelineWgslTagFn(241)`
 		fn getCameraRay( uv: vec2f, resolution: vec2f, ray: ptr<function, ${ rayStruct }> ) -> bool {
 
 			// base ray

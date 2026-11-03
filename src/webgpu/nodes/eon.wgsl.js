@@ -1,262 +1,36 @@
+import { pipelineWgslFn } from 'three-mesh-bvh/webgpu';
 import { wgslFn } from 'three/tsl';
 import { constants, surfaceRecordStruct } from './structs.wgsl.js';
 
-const eonDirectionalAlbedoFunc = wgslFn( /* wgsl */ `
+const eonDirectionalAlbedoFunc = pipelineWgslFn(122, ["\n\n\tfn eonDirectionalAlbedo( mu: f32, roughness: f32, A: f32 ) -> f32 {\n\n\t\tlet muComp = 1.0 - mu;\n\t\tlet gOverPi = muComp * (\n\t\t\t0.0571085289 + muComp * (\n\t\t\t\t0.491881867 + muComp * (\n\t\t\t\t\t- 0.332181442 + muComp * 0.0714429953\n\t\t\t\t)\n\t\t\t)\n\t\t);\n\t\treturn A * ( 1.0 + roughness * gOverPi );\n\n\t}\n\n"], [], []);
 
-	fn eonDirectionalAlbedo( mu: f32, roughness: f32, A: f32 ) -> f32 {
-
-		let muComp = 1.0 - mu;
-		let gOverPi = muComp * (
-			0.0571085289 + muComp * (
-				0.491881867 + muComp * (
-					- 0.332181442 + muComp * 0.0714429953
-				)
-			)
-		);
-		return A * ( 1.0 + roughness * gOverPi );
-
-	}
-
-` );
-
-const fonSingleScatterFunc = wgslFn( /* wgsl */ `
-
-	fn fonSingleScatter( NdotV: f32, NdotL: f32, VdotH: f32, roughness: f32, A: f32, rho: vec3f ) -> vec3f {
-
-		let VdotL = 2.0 * VdotH * VdotH - 1.0;
-		let s = VdotL - NdotV * NdotL;
-		let sOverT = select( s, s / max( NdotV, NdotL ), s > 0.0 );
-
-		return ( rho / PI ) * A * ( 1.0 + roughness * sOverT );
-
-	}
-
-`, [ constants ] );
+const fonSingleScatterFunc = pipelineWgslFn(123, ["\n\n\tfn fonSingleScatter( NdotV: f32, NdotL: f32, VdotH: f32, roughness: f32, A: f32, rho: vec3f ) -> vec3f {\n\n\t\tlet VdotL = 2.0 * VdotH * VdotH - 1.0;\n\t\tlet s = VdotL - NdotV * NdotL;\n\t\tlet sOverT = select( s, s / max( NdotV, NdotL ), s > 0.0 );\n\n\t\treturn ( rho / PI ) * A * ( 1.0 + roughness * sOverT );\n\n\t}\n\n"], [], [ constants ]);
 
 // Fujii's improved Oren-Nayar single-scatter diffuse BRDF.
 // Based on: https://jcgt.org/published/0014/01/06/ (Section 2, Listing 1)
-export const fonBrdfFunc = wgslFn( /* wgsl */ `
-
-	fn fonBrdf( NdotV: f32, NdotL: f32, VdotH: f32, surf: SurfaceRecord ) -> vec3f {
-
-		let roughness = surf.diffuseRoughness;
-		if ( roughness < 1e-5 ) {
-
-			return surf.color / PI;
-
-		}
-
-		let rho = saturate( surf.color );
-		let A = 1.0 / ( 1.0 + ( 0.5 - 2.0 / ( 3.0 * PI ) ) * roughness );
-
-		return fonSingleScatter( NdotV, NdotL, VdotH, roughness, A, rho );
-
-	}
-
-`, [ constants, surfaceRecordStruct, fonSingleScatterFunc ] );
+export const fonBrdfFunc = pipelineWgslFn(124, ["\n\n\tfn fonBrdf( NdotV: f32, NdotL: f32, VdotH: f32, surf: SurfaceRecord ) -> vec3f {\n\n\t\tlet roughness = surf.diffuseRoughness;\n\t\tif ( roughness < 1e-5 ) {\n\n\t\t\treturn surf.color / PI;\n\n\t\t}\n\n\t\tlet rho = saturate( surf.color );\n\t\tlet A = 1.0 / ( 1.0 + ( 0.5 - 2.0 / ( 3.0 * PI ) ) * roughness );\n\n\t\treturn fonSingleScatter( NdotV, NdotL, VdotH, roughness, A, rho );\n\n\t}\n\n"], [], [ constants, surfaceRecordStruct, fonSingleScatterFunc ]);
 
 // Energy-preserving Oren-Nayar diffuse BRDF (EON).
 // Based on: https://jcgt.org/published/0014/01/06/ (Section 3, Listing 2)
-export const eonBrdfFunc = wgslFn( /* wgsl */ `
-
-	fn eonBrdf( NdotV: f32, NdotL: f32, VdotH: f32, surf: SurfaceRecord ) -> vec3f {
-
-		let roughness = surf.diffuseRoughness;
-		if ( roughness < 1e-5 ) {
-
-			return surf.color / PI;
-
-		}
-
-		let rho = saturate( surf.color );
-		let A = 1.0 / ( 1.0 + ( 0.5 - 2.0 / ( 3.0 * PI ) ) * roughness );
-		let singleScatter = fonSingleScatter( NdotV, NdotL, VdotH, roughness, A, rho );
-
-		let averageDirectionalAlbedo = A * ( 1.0 + ( 2.0 / 3.0 - 28.0 / ( 15.0 * PI ) ) * roughness );
-		let directionalAlbedoV = eonDirectionalAlbedo( NdotV, roughness, A );
-		let directionalAlbedoL = eonDirectionalAlbedo( NdotL, roughness, A );
-
-		let rhoMultiScatter = rho * rho * averageDirectionalAlbedo /
-			max( vec3f( 1e-7 ), vec3f( 1.0 ) - rho * ( 1.0 - averageDirectionalAlbedo ) );
-		let multiScatter = ( rhoMultiScatter / PI ) *
-			max( 1e-7, 1.0 - directionalAlbedoV ) *
-			max( 1e-7, 1.0 - directionalAlbedoL ) /
-			max( 1e-7, 1.0 - averageDirectionalAlbedo );
-
-		return singleScatter + multiScatter;
-
-	}
-
-`, [ constants, surfaceRecordStruct, eonDirectionalAlbedoFunc, fonSingleScatterFunc ] );
+export const eonBrdfFunc = pipelineWgslFn(125, ["\n\n\tfn eonBrdf( NdotV: f32, NdotL: f32, VdotH: f32, surf: SurfaceRecord ) -> vec3f {\n\n\t\tlet roughness = surf.diffuseRoughness;\n\t\tif ( roughness < 1e-5 ) {\n\n\t\t\treturn surf.color / PI;\n\n\t\t}\n\n\t\tlet rho = saturate( surf.color );\n\t\tlet A = 1.0 / ( 1.0 + ( 0.5 - 2.0 / ( 3.0 * PI ) ) * roughness );\n\t\tlet singleScatter = fonSingleScatter( NdotV, NdotL, VdotH, roughness, A, rho );\n\n\t\tlet averageDirectionalAlbedo = A * ( 1.0 + ( 2.0 / 3.0 - 28.0 / ( 15.0 * PI ) ) * roughness );\n\t\tlet directionalAlbedoV = eonDirectionalAlbedo( NdotV, roughness, A );\n\t\tlet directionalAlbedoL = eonDirectionalAlbedo( NdotL, roughness, A );\n\n\t\tlet rhoMultiScatter = rho * rho * averageDirectionalAlbedo /\n\t\t\tmax( vec3f( 1e-7 ), vec3f( 1.0 ) - rho * ( 1.0 - averageDirectionalAlbedo ) );\n\t\tlet multiScatter = ( rhoMultiScatter / PI ) *\n\t\t\tmax( 1e-7, 1.0 - directionalAlbedoV ) *\n\t\t\tmax( 1e-7, 1.0 - directionalAlbedoL ) /\n\t\t\tmax( 1e-7, 1.0 - averageDirectionalAlbedo );\n\n\t\treturn singleScatter + multiScatter;\n\n\t}\n\n"], [], [ constants, surfaceRecordStruct, eonDirectionalAlbedoFunc, fonSingleScatterFunc ]);
 
 // EON importance sampling: a clipped linearly transformed cosine (CLTC) lobe
 // mixed with a uniform hemisphere lobe. Based on Listing 3 and Listing 4:
 // https://jcgt.org/published/0014/01/06/
-const eonLtcCoeffsFunc = wgslFn( /* wgsl */ `
+const eonLtcCoeffsFunc = pipelineWgslFn(126, ["\n\n\tfn eonLtcCoeffs( mu: f32, roughness: f32 ) -> vec4f {\n\n\t\tlet a = 1.0 + roughness * (\n\t\t\t0.303392 + ( - 0.518982 + 0.111709 * mu ) * mu +\n\t\t\t( - 0.276266 + 0.335918 * mu ) * roughness\n\t\t);\n\t\tlet b = roughness * (\n\t\t\t- 1.16407 + 1.15859 * mu + ( 0.150815 - 0.150105 * mu ) * roughness\n\t\t) / ( mu * mu * mu - 1.43545 );\n\t\tlet c = 1.0 + roughness * ( 0.20013 + ( - 0.506373 + 0.261777 * mu ) * mu );\n\t\tlet d = roughness * (\n\t\t\t0.540852 + ( - 1.01625 + 0.475392 * mu ) * mu\n\t\t) / ( - 1.0743 + ( 0.0725628 + mu ) * mu );\n\n\t\treturn vec4f( a, b, c, d );\n\n\t}\n\n"], [], []);
 
-	fn eonLtcCoeffs( mu: f32, roughness: f32 ) -> vec4f {
+const eonLtcBasisFunc = pipelineWgslFn(127, ["\n\n\tfn eonLtcBasis( wo: vec3f ) -> mat3x3f {\n\n\t\tlet lenSqr = dot( wo.xy, wo.xy );\n\t\tlet invLen = inverseSqrt( max( lenSqr, 1e-7 ) );\n\t\tlet x = select(\n\t\t\tvec3f( 1.0, 0.0, 0.0 ),\n\t\t\tvec3f( wo.x, wo.y, 0.0 ) * invLen,\n\t\t\tlenSqr > 0.0,\n\t\t);\n\t\tlet y = vec3f( - x.y, x.x, 0.0 );\n\n\t\treturn mat3x3f( x, y, vec3f( 0.0, 0.0, 1.0 ) );\n\n\t}\n\n"], [], []);
 
-		let a = 1.0 + roughness * (
-			0.303392 + ( - 0.518982 + 0.111709 * mu ) * mu +
-			( - 0.276266 + 0.335918 * mu ) * roughness
-		);
-		let b = roughness * (
-			- 1.16407 + 1.15859 * mu + ( 0.150815 - 0.150105 * mu ) * roughness
-		) / ( mu * mu * mu - 1.43545 );
-		let c = 1.0 + roughness * ( 0.20013 + ( - 0.506373 + 0.261777 * mu ) * mu );
-		let d = roughness * (
-			0.540852 + ( - 1.01625 + 0.475392 * mu ) * mu
-		) / ( - 1.0743 + ( 0.0725628 + mu ) * mu );
+const eonCltcPdfFunc = pipelineWgslFn(128, ["\n\n\tfn eonCltcPdf( wo: vec3f, wi: vec3f, roughness: f32 ) -> f32 {\n\n\t\tlet toLtc = transpose( eonLtcBasis( wo ) );\n\t\tlet wiLtc = toLtc * wi;\n\t\tlet coeffs = eonLtcCoeffs( saturate( wo.z ), roughness );\n\t\tlet a = coeffs.x;\n\t\tlet b = coeffs.y;\n\t\tlet c = coeffs.z;\n\t\tlet d = coeffs.w;\n\t\tlet detM = c * ( a - b * d );\n\t\tlet wh = vec3f(\n\t\t\tc * ( wiLtc.x - b * wiLtc.z ),\n\t\t\t( a - b * d ) * wiLtc.y,\n\t\t\t- c * ( d * wiLtc.x - a * wiLtc.z ),\n\t\t);\n\t\tlet lenSqr = max( dot( wh, wh ), 1e-7 );\n\t\tlet vz = inverseSqrt( d * d + 1.0 );\n\t\tlet s = 0.5 * ( 1.0 + vz );\n\t\tlet jacobian = detM * detM / ( lenSqr * lenSqr );\n\n\t\treturn jacobian * max( wh.z, 0.0 ) / ( PI * s );\n\n\t}\n\n"], [], [ constants, eonLtcCoeffsFunc, eonLtcBasisFunc ]);
 
-		return vec4f( a, b, c, d );
+const eonCltcDirectionFunc = pipelineWgslFn(129, ["\n\n\tfn eonCltcDirection( wo: vec3f, roughness: f32, uv: vec2f ) -> vec3f {\n\n\t\tlet coeffs = eonLtcCoeffs( saturate( wo.z ), roughness );\n\t\tlet a = coeffs.x;\n\t\tlet b = coeffs.y;\n\t\tlet c = coeffs.z;\n\t\tlet d = coeffs.w;\n\t\tlet radius = sqrt( uv.x );\n\t\tlet phi = 2.0 * PI * uv.y;\n\t\tlet y = radius * sin( phi );\n\t\tlet vz = inverseSqrt( d * d + 1.0 );\n\t\tlet s = 0.5 * ( 1.0 + vz );\n\t\tlet x = - mix( sqrt( max( 1.0 - y * y, 0.0 ) ), radius * cos( phi ), s );\n\t\tlet wh = vec3f( x, y, sqrt( max( 1.0 - x * x - y * y, 0.0 ) ) );\n\t\tlet wiUnnormalized = vec3f(\n\t\t\ta * wh.x + b * wh.z,\n\t\t\tc * wh.y,\n\t\t\td * wh.x + wh.z,\n\t\t);\n\t\tlet wi = normalize( eonLtcBasis( wo ) * wiUnnormalized );\n\n\t\treturn wi;\n\n\t}\n\n"], [], [ constants, eonLtcCoeffsFunc, eonLtcBasisFunc ]);
 
-	}
+const eonUniformHemisphereSampleFunc = pipelineWgslFn(130, ["\n\n\tfn eonUniformHemisphereSample( uv: vec2f ) -> vec3f {\n\n\t\tlet sinTheta = sqrt( max( 1.0 - uv.x * uv.x, 0.0 ) );\n\t\tlet phi = 2.0 * PI * uv.y;\n\t\treturn vec3f( sinTheta * cos( phi ), sinTheta * sin( phi ), uv.x );\n\n\t}\n\n"], [], [ constants ]);
 
-` );
-
-const eonLtcBasisFunc = wgslFn( /* wgsl */ `
-
-	fn eonLtcBasis( wo: vec3f ) -> mat3x3f {
-
-		let lenSqr = dot( wo.xy, wo.xy );
-		let invLen = inverseSqrt( max( lenSqr, 1e-7 ) );
-		let x = select(
-			vec3f( 1.0, 0.0, 0.0 ),
-			vec3f( wo.x, wo.y, 0.0 ) * invLen,
-			lenSqr > 0.0,
-		);
-		let y = vec3f( - x.y, x.x, 0.0 );
-
-		return mat3x3f( x, y, vec3f( 0.0, 0.0, 1.0 ) );
-
-	}
-
-` );
-
-const eonCltcPdfFunc = wgslFn( /* wgsl */ `
-
-	fn eonCltcPdf( wo: vec3f, wi: vec3f, roughness: f32 ) -> f32 {
-
-		let toLtc = transpose( eonLtcBasis( wo ) );
-		let wiLtc = toLtc * wi;
-		let coeffs = eonLtcCoeffs( saturate( wo.z ), roughness );
-		let a = coeffs.x;
-		let b = coeffs.y;
-		let c = coeffs.z;
-		let d = coeffs.w;
-		let detM = c * ( a - b * d );
-		let wh = vec3f(
-			c * ( wiLtc.x - b * wiLtc.z ),
-			( a - b * d ) * wiLtc.y,
-			- c * ( d * wiLtc.x - a * wiLtc.z ),
-		);
-		let lenSqr = max( dot( wh, wh ), 1e-7 );
-		let vz = inverseSqrt( d * d + 1.0 );
-		let s = 0.5 * ( 1.0 + vz );
-		let jacobian = detM * detM / ( lenSqr * lenSqr );
-
-		return jacobian * max( wh.z, 0.0 ) / ( PI * s );
-
-	}
-
-`, [ constants, eonLtcCoeffsFunc, eonLtcBasisFunc ] );
-
-const eonCltcDirectionFunc = wgslFn( /* wgsl */ `
-
-	fn eonCltcDirection( wo: vec3f, roughness: f32, uv: vec2f ) -> vec3f {
-
-		let coeffs = eonLtcCoeffs( saturate( wo.z ), roughness );
-		let a = coeffs.x;
-		let b = coeffs.y;
-		let c = coeffs.z;
-		let d = coeffs.w;
-		let radius = sqrt( uv.x );
-		let phi = 2.0 * PI * uv.y;
-		let y = radius * sin( phi );
-		let vz = inverseSqrt( d * d + 1.0 );
-		let s = 0.5 * ( 1.0 + vz );
-		let x = - mix( sqrt( max( 1.0 - y * y, 0.0 ) ), radius * cos( phi ), s );
-		let wh = vec3f( x, y, sqrt( max( 1.0 - x * x - y * y, 0.0 ) ) );
-		let wiUnnormalized = vec3f(
-			a * wh.x + b * wh.z,
-			c * wh.y,
-			d * wh.x + wh.z,
-		);
-		let wi = normalize( eonLtcBasis( wo ) * wiUnnormalized );
-
-		return wi;
-
-	}
-
-`, [ constants, eonLtcCoeffsFunc, eonLtcBasisFunc ] );
-
-const eonUniformHemisphereSampleFunc = wgslFn( /* wgsl */ `
-
-	fn eonUniformHemisphereSample( uv: vec2f ) -> vec3f {
-
-		let sinTheta = sqrt( max( 1.0 - uv.x * uv.x, 0.0 ) );
-		let phi = 2.0 * PI * uv.y;
-		return vec3f( sinTheta * cos( phi ), sinTheta * sin( phi ), uv.x );
-
-	}
-
-`, [ constants ] );
-
-const eonUniformProbabilityFunc = wgslFn( /* wgsl */ `
-
-	fn eonUniformProbability( wo: vec3f, roughness: f32 ) -> f32 {
-
-		let mu = saturate( wo.z );
-		return clamp( pow( roughness, 0.1 ), 0.0, 1.0 ) * (
-			0.162925 + ( - 0.372058 + ( 0.538233 - 0.290822 * mu ) * mu ) * mu
-		);
-
-	}
-
-` );
+const eonUniformProbabilityFunc = pipelineWgslFn(131, ["\n\n\tfn eonUniformProbability( wo: vec3f, roughness: f32 ) -> f32 {\n\n\t\tlet mu = saturate( wo.z );\n\t\treturn clamp( pow( roughness, 0.1 ), 0.0, 1.0 ) * (\n\t\t\t0.162925 + ( - 0.372058 + ( 0.538233 - 0.290822 * mu ) * mu ) * mu\n\t\t);\n\n\t}\n\n"], [], []);
 
 // EON's CLTC + uniform-hemisphere sampler. The PDF is evaluated separately by
 // eonPdf so direction sampling does not pay for a discarded Jacobian evaluation.
-export const eonDirectionFunc = wgslFn( /* wgsl */ `
+export const eonDirectionFunc = pipelineWgslFn(132, ["\n\n\tfn eonDirection( wo: vec3f, roughness: f32, uv: vec2f ) -> vec3f {\n\n\t\tlet uniformProbability = eonUniformProbability( wo, roughness );\n\t\tif ( uv.x <= uniformProbability && uniformProbability > 0.0 ) {\n\n\t\t\treturn eonUniformHemisphereSample( vec2f( uv.x / uniformProbability, uv.y ) );\n\n\t\t}\n\n\t\tlet cltcProbability = 1.0 - uniformProbability;\n\t\tlet cltcUv = vec2f(\n\t\t\t( uv.x - uniformProbability ) / max( cltcProbability, 1e-7 ),\n\t\t\tuv.y,\n\t\t);\n\t\treturn eonCltcDirection( wo, roughness, cltcUv );\n\n\t}\n\n"], [], [ eonCltcDirectionFunc, eonUniformHemisphereSampleFunc, eonUniformProbabilityFunc ]);
 
-	fn eonDirection( wo: vec3f, roughness: f32, uv: vec2f ) -> vec3f {
-
-		let uniformProbability = eonUniformProbability( wo, roughness );
-		if ( uv.x <= uniformProbability && uniformProbability > 0.0 ) {
-
-			return eonUniformHemisphereSample( vec2f( uv.x / uniformProbability, uv.y ) );
-
-		}
-
-		let cltcProbability = 1.0 - uniformProbability;
-		let cltcUv = vec2f(
-			( uv.x - uniformProbability ) / max( cltcProbability, 1e-7 ),
-			uv.y,
-		);
-		return eonCltcDirection( wo, roughness, cltcUv );
-
-	}
-
-`, [ eonCltcDirectionFunc, eonUniformHemisphereSampleFunc, eonUniformProbabilityFunc ] );
-
-export const eonPDFFunc = wgslFn( /* wgsl */ `
-
-	fn eonPdf( wo: vec3f, wi: vec3f, roughness: f32 ) -> f32 {
-
-		// The EON proposal is defined over the positive hemisphere.
-		if ( wo.z <= 0.0 || wi.z <= 0.0 ) {
-
-			return 0.0;
-
-		}
-
-		let uniformProbability = eonUniformProbability( wo, roughness );
-		let cltcProbability = 1.0 - uniformProbability;
-		let uniformPdf = 1.0 / ( 2.0 * PI );
-
-		return uniformProbability * uniformPdf +
-			cltcProbability * eonCltcPdf( wo, wi, roughness );
-
-	}
-
-`, [ constants, eonCltcPdfFunc, eonUniformProbabilityFunc ] );
+export const eonPDFFunc = pipelineWgslFn(133, ["\n\n\tfn eonPdf( wo: vec3f, wi: vec3f, roughness: f32 ) -> f32 {\n\n\t\t// The EON proposal is defined over the positive hemisphere.\n\t\tif ( wo.z <= 0.0 || wi.z <= 0.0 ) {\n\n\t\t\treturn 0.0;\n\n\t\t}\n\n\t\tlet uniformProbability = eonUniformProbability( wo, roughness );\n\t\tlet cltcProbability = 1.0 - uniformProbability;\n\t\tlet uniformPdf = 1.0 / ( 2.0 * PI );\n\n\t\treturn uniformProbability * uniformPdf +\n\t\t\tcltcProbability * eonCltcPdf( wo, wi, roughness );\n\n\t}\n\n"], [], [ constants, eonCltcPdfFunc, eonUniformProbabilityFunc ]);

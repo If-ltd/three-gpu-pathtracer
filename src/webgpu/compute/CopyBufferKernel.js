@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { StorageBufferAttribute } from 'three/webgpu';
 import { uniform, storage, globalId } from 'three/tsl';
 import { ComputeKernel } from './ComputeKernel.js';
@@ -16,7 +17,7 @@ export class CopyBufferKernel extends ComputeKernel {
 			globalId: globalId,
 		};
 
-		const fn = wgslTagFn/* wgsl */`
+		const fn = pipelineWgslTagFn(56)`
 			fn compute( count: u32, globalId: vec3u ) -> void {
 
 				let index = globalId.x;

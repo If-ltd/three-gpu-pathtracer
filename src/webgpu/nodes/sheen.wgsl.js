@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { wgslTagFn } from 'three-mesh-bvh/webgpu';
 import { surfaceRecordStruct } from './structs.wgsl.js';
 
@@ -9,7 +10,7 @@ import { surfaceRecordStruct } from './structs.wgsl.js';
 // http://www.aconty.com/pdf/s2017_pbs_imageworks_sheen.pdf
 
 // See equation (2)
-const velvetDFunc = wgslTagFn/* wgsl */`
+const velvetDFunc = pipelineWgslTagFn(206)`
 
 	fn velvetD( cosThetaH: f32, roughness: f32 ) -> f32 {
 
@@ -26,7 +27,7 @@ const velvetDFunc = wgslTagFn/* wgsl */`
 
 `;
 
-const velvetParamsInterpolateFunc = wgslTagFn/* wgsl */`
+const velvetParamsInterpolateFunc = pipelineWgslTagFn(207)`
 
 	fn velvetParamsInterpolate( i: i32, oneMinusAlphaSquared: f32 ) -> f32 {
 
@@ -39,7 +40,7 @@ const velvetParamsInterpolateFunc = wgslTagFn/* wgsl */`
 
 `;
 
-const velvetLFunc = wgslTagFn/* wgsl */`
+const velvetLFunc = pipelineWgslTagFn(208)`
 
 	fn velvetL( x: f32, alpha: f32 ) -> f32 {
 
@@ -59,7 +60,7 @@ const velvetLFunc = wgslTagFn/* wgsl */`
 `;
 
 // See equation (3)
-const velvetLambdaFunc = wgslTagFn/* wgsl */`
+const velvetLambdaFunc = pipelineWgslTagFn(209)`
 
 	fn velvetLambda( cosTheta: f32, alpha: f32 ) -> f32 {
 
@@ -78,7 +79,7 @@ const velvetLambdaFunc = wgslTagFn/* wgsl */`
 `;
 
 // See Section 3, Shadowing Term
-const velvetGFunc = wgslTagFn/* wgsl */`
+const velvetGFunc = pipelineWgslTagFn(210)`
 
 	fn velvetG( cosThetaO: f32, cosThetaI: f32, roughness: f32 ) -> f32 {
 
@@ -92,7 +93,7 @@ const velvetGFunc = wgslTagFn/* wgsl */`
 `;
 
 // analytic directional albedo fit, used for energy compensation when layering ( Section 5 )
-const directionalAlbedoSheenFunc = wgslTagFn/* wgsl */`
+const directionalAlbedoSheenFunc = pipelineWgslTagFn(211)`
 
 	fn directionalAlbedoSheen( cosThetaIn: f32, alpha: f32 ) -> f32 {
 
@@ -108,7 +109,7 @@ const directionalAlbedoSheenFunc = wgslTagFn/* wgsl */`
 
 // See Section 5, Layering - the factor the base lobes are attenuated by so the sheen layer
 // does not add energy on top of a fully reflective base
-export const sheenAlbedoScalingFunc = wgslTagFn/* wgsl */`
+export const sheenAlbedoScalingFunc = pipelineWgslTagFn(212)`
 
 	fn sheenAlbedoScaling( wo: vec3f, wi: vec3f, surf: ${ surfaceRecordStruct } ) -> f32 {
 
@@ -126,7 +127,7 @@ export const sheenAlbedoScalingFunc = wgslTagFn/* wgsl */`
 
 `;
 
-export const sheenColorFunc = wgslTagFn/* wgsl */`
+export const sheenColorFunc = pipelineWgslTagFn(213)`
 
 	fn sheenColor( wo: vec3f, wi: vec3f, wh: vec3f, surf: ${ surfaceRecordStruct } ) -> vec3f {
 

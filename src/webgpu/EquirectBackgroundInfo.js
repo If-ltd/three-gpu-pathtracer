@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { DataTexture, LinearFilter, Matrix4, RGBAFormat, RepeatWrapping } from 'three';
 import { sampler, texture, uniform } from 'three/tsl';
 import { wgslTagFn } from 'three-mesh-bvh/webgpu';
@@ -77,7 +78,7 @@ export class EquirectBackgroundInfo {
 
 		const { mapNode, mapSampler, blurNode, rotationNode, intensityNode } = this;
 
-		this.sampleColor = wgslTagFn/* wgsl */`
+		this.sampleColor = pipelineWgslTagFn(39)`
 			fn sampleBackground( direction: vec3f, uv: vec2f ) -> vec4f {
 
 				let rotatedDir = ( ${ rotationNode } * vec4f( direction, 0.0 ) ).xyz;

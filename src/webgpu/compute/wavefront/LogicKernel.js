@@ -1,3 +1,6 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
+import { bindPipelineShader } from './pipeline-shader.js';
+import { createPathStateAccessors } from './path-state.js';
 import { StorageBufferAttribute, StorageTexture } from 'three/webgpu';
 import { ComputeKernel } from '../ComputeKernel.js';
 import { uniform, storage, textureStore, globalId } from 'three/tsl';
@@ -12,7 +15,7 @@ import {
 } from '../../nodes/random.wgsl.js';
 import { ENVIRONMENT_LIGHT_TYPE, LIGHT_FAR_DISTANCE, isMISWeightLightFn } from '../../nodes/lights.wgsl.js';
 import { lightRecordStruct, scatterRecordStruct } from '../../nodes/structs.wgsl.js';
-import { rayDataStruct, intersectionResultStruct } from './structs.js';
+import { rayDataStruct, intersectionResultStruct, rayQueueAtomicStruct } from './structs.js';
 import { SAMPLE_COUNT_MASK, SAMPLE_DISPATCHED_FLAG } from '../../constants.js';
 
 // Path logic over the persistent slot pool: resolves the previous frame's shadow and bounce trace
@@ -20,27 +23,33 @@ import { SAMPLE_COUNT_MASK, SAMPLE_DISPATCHED_FLAG } from '../../constants.js';
 // the output, and samples the next NEE light for MaterialKernel. Touches no BVH data.
 export class LogicKernel extends ComputeKernel {
 
-	constructor( ) {
+	constructor(sparseAccumulation = false, adaptiveSampling = false, soa = false, shaderList, captureDiffuse = false) {
 
 		const params = {
+            diffuseTarget: textureStore(new StorageTexture(1, 1)).toReadWrite(),
 			envInfo: { value: null },
 			backgroundInfo: { value: null },
 			lightsInfo: { value: null },
 
+			moments: textureStore(new StorageTexture(1, 1)).toReadWrite(),
 			// targets
+			outputStorage: storage( new StorageBufferAttribute( 1, 4 ), 'vec4' ),
 			prevOutputTarget: textureStore( new StorageTexture( 1, 1 ) ).toReadOnly(),
-			outputTarget: textureStore( new StorageTexture( 1, 1 ) ).toWriteOnly(),
+			outputTarget: sparseAccumulation ? textureStore(new StorageTexture(1, 1)).toReadWrite() : textureStore(new StorageTexture(1, 1)).toWriteOnly(),
 			sampleCountTarget: textureStore( new StorageTexture( 1, 1 ) ).toReadWrite(),
 
 			// settings
 			misEnabled: uniform( 1, 'uint' ),
 			rayCount: uniform( 0, 'uint' ),
+			resetRayQueues: uniform( 0, 'uint' ),
+			rayQueue: storage( new StorageBufferAttribute( 1, 1 ), rayQueueAtomicStruct ),
+			shadowRayQueue: storage( new StorageBufferAttribute( 1, 1 ), rayQueueAtomicStruct ),
 			maxBounces: uniform( 5, 'uint' ),
 			clampDirect: uniform( 0 ),
 			clampIndirect: uniform( 10 ),
 			transmissiveBackground: uniform( TRANSMISSIVE_BACKGROUND_OVERLAY ),
 
-			rayDataStorage: storage( new StorageBufferAttribute( 1, 1 ), rayDataStruct ),
+			rayDataStorage: storage( new StorageBufferAttribute( 1, 1 ), soa ? 'uint' : rayDataStruct ),
 			rayIntersectionsStorage: storage( new StorageBufferAttribute( 1, 1 ), intersectionResultStruct ),
 			shadowRayIntersectionsStorage: storage( new StorageBufferAttribute( 1, 1 ), intersectionResultStruct ),
 
@@ -65,12 +74,66 @@ export class LogicKernel extends ComputeKernel {
 		const selectLightFn = proxyFn( 'lightsInfo.value.selectLight', params );
 		const isLightVisibleToCameraFn = proxyFn( 'lightsInfo.value.isLightVisibleToCamera', params );
 
-		const fn = wgslTagFn/* wgsl */`
+		const readPreviousColorFn = sparseAccumulation ? (shaderList === undefined ? pipelineWgslTagFn(67)`
+			fn readPreviousColor( indexUV: vec2u, colorIndex: vec2u, storedSamples: u32 ) -> vec4f {
+
+				// Each pixel has one owner in the path pool. A zero sample count
+				// invalidates storage from an earlier camera or image reset.
+				if ( storedSamples == 0u ) { return vec4f( 0.0 ); }
+				let index = indexUV.y * textureDimensions( ${ params.outputTarget } ).x + indexUV.x;
+				return textureLoad(${params.outputTarget}, colorIndex);
+
+			}
+		` : bindPipelineShader(shaderList.readSparseColor, { outputTarget: params.outputTarget })) : (shaderList === undefined ? pipelineWgslTagFn(68)`
+			fn readPreviousColor( indexUV: vec2u, colorIndex: vec2u, storedSamples: u32 ) -> vec4f {
+
+				return textureLoad( ${ params.prevOutputTarget }, colorIndex );
+
+			}
+		` : bindPipelineShader(shaderList.readBufferedColor, { prevOutputTarget: params.prevOutputTarget }));
+		const storeColorFn = sparseAccumulation ? (shaderList === undefined ? pipelineWgslTagFn(69)`
+			fn storeColor( indexUV: vec2u, colorIndex: vec2u, color: vec4f ) -> void {
+
+				let index = indexUV.y * textureDimensions( ${ params.outputTarget } ).x + indexUV.x;
+				textureStore( ${ params.outputTarget }, colorIndex, color );
+
+			}
+		` : bindPipelineShader(shaderList.storeSparseColor, { outputTarget: params.outputTarget })) : (shaderList === undefined ? pipelineWgslTagFn(70)`
+			fn storeColor( indexUV: vec2u, colorIndex: vec2u, color: vec4f ) -> void {
+
+				textureStore( ${ params.outputTarget }, colorIndex, color );
+
+			}
+		` : bindPipelineShader(shaderList.storeBufferedColor, { outputTarget: params.outputTarget }));
+
+		const recordMoments = adaptiveSampling ? (shaderList === undefined ? pipelineWgslTagFn(71)`
+            fn recordMoments(indexUV: vec2u, count: u32, color: vec4f) -> void {
+                let uv = vec2u(indexUV.x * 2u, indexUV.y);
+                var mean = vec4f(0.0); var m2 = vec4f(0.0);
+                if (count > 1u) { mean = textureLoad(${params.moments}, uv); m2 = textureLoad(${params.moments}, uv + vec2u(1u, 0u)); }
+                let delta = color - mean;
+                mean += delta / f32(count);
+                m2 += delta * (color - mean);
+                textureStore(${params.moments}, uv, mean); textureStore(${params.moments}, uv + vec2u(1u, 0u), m2);
+            }
+        ` : bindPipelineShader(shaderList.recordMoments, { moments: params.moments })) : (shaderList === undefined ? pipelineWgslTagFn(72)`fn recordMoments(indexUV: vec2u, count: u32, color: vec4f) -> void {}` : bindPipelineShader(shaderList.skipMoments, {  }));
+
+        const path = createPathStateAccessors(params.rayDataStorage, soa);
+        const storeDiffuse = captureDiffuse ? wgslTagFn`
+            fn storeDiffuse(pixel: vec2u, samples: u32, value: vec4f) -> void {
+                var previous = vec4f(0.0);
+                if (samples > 1u) { previous = textureLoad(${params.diffuseTarget}, pixel); }
+                textureStore(${params.diffuseTarget}, pixel, mix(previous, value, 1.0 / f32(samples)));
+            }
+        ` : wgslTagFn`fn storeDiffuse(pixel: vec2u, samples: u32, value: vec4f) -> void {}`;
+
+		const fn = (shaderList === undefined ? pipelineWgslTagFn(73)`
 
 			fn compute(
 				// settings
 				misEnabled: u32,
 				rayCount: u32,
+				resetRayQueues: u32,
 				maxBounces: u32,
 				clampDirect: f32,
 				clampIndirect: f32,
@@ -79,12 +142,22 @@ export class LogicKernel extends ComputeKernel {
 				globalId: vec3u
 			) -> void {
 
-				let rayDataStorage = &${ params.rayDataStorage };
+
 				let rayIntersectionsStorage = &${ params.rayIntersectionsStorage };
 				let shadowRayIntersectionsStorage = &${ params.shadowRayIntersectionsStorage };
 
 				// bound by "rayCount" rather than the pool length. See MaterialKernel
 				let index = globalId.x;
+				// Logic reads intersections, never the trace queues. Reset both queue
+				// headers here; the next dispatch is the storage visibility boundary.
+				if ( index == 0u && resetRayQueues != 0u ) {
+
+					let rayQueue = &${ params.rayQueue };
+					let shadowRayQueue = &${ params.shadowRayQueue };
+					atomicStore( &rayQueue.length, 0u );
+					atomicStore( &shadowRayQueue.length, 0u );
+
+				}
 				if ( index >= rayCount ) {
 
 					return;
@@ -92,7 +165,7 @@ export class LogicKernel extends ComputeKernel {
 				}
 
 				// skip slots that have never spawned a ray
-				let input = ( *rayDataStorage )[ index ];
+				let input = ${ path.load }(index);
 				if ( input.rayIntersectionIndex < 0 ) {
 
 					return;
@@ -115,6 +188,8 @@ export class LogicKernel extends ComputeKernel {
 
 				var resultColor = input.resultColor;
 				var throughputColor = input.throughputColor;
+                var diffuseThroughput = input.diffuseThroughput;
+                var diffuseResult = input.diffuseResult;
 
 				// added last, since a camera ray miss overwrites the pixel with the background
 				var lightHits = vec3f( 0.0 );
@@ -133,8 +208,12 @@ export class LogicKernel extends ComputeKernel {
 						let isMISWeighted = ${ isMISWeightLightFn }( input.lightType ) && shadowHit.forwardBlocked == 0u;
 						let misWeight = select( 1.0, ${ misHeuristicFn }( input.lightPdf, input.lightBsdfPdf ), isMISWeighted );
 						let directLight = throughputColor * input.lightEmission * input.lightBsdf * misWeight / input.lightPdf;
+                        if (input.currentBounce == 1u) {
+                            diffuseResult += throughputColor * input.lightEmission * input.diffuseLight * misWeight / input.lightPdf;
+                        }
 						let contribution = ${ clampPathContributionFunc }( directLight, input.currentBounce, clampDirect, clampIndirect );
 						resultColor += vec4f( contribution, 0.0 );
+                        diffuseResult += diffuseThroughput * input.lightEmission * input.lightBsdf * misWeight / input.lightPdf;
 
 					}
 
@@ -144,6 +223,7 @@ export class LogicKernel extends ComputeKernel {
 				// at the depth of the segment that found it, as in Cycles, so one less than the current
 				let emission = ${ clampPathContributionFunc }( throughputColor * input.emission, max( input.currentBounce, 1u ) - 1u, clampDirect, clampIndirect );
 				resultColor += vec4f( emission, 0.0 );
+                diffuseResult += diffuseThroughput * input.emission;
 
 				// reconstruct the scatter record staged by MaterialKernel
 				var scatterRec: ${ scatterRecordStruct };
@@ -157,7 +237,12 @@ export class LogicKernel extends ComputeKernel {
 				if ( ! isTerminated ) {
 
 					// apply the scatter across the traced segment
-					throughputColor *= scatterRec.color / scatterRec.pdf;
+					if (input.currentBounce == 1u) {
+                        diffuseThroughput = throughputColor * input.diffuseScatter / scatterRec.pdf;
+                    } else {
+                        diffuseThroughput *= scatterRec.color / scatterRec.pdf;
+                    }
+                    throughputColor *= scatterRec.color / scatterRec.pdf;
 
 					let hitResult = ( *rayIntersectionsStorage )[ u32( input.rayIntersectionIndex ) ];
 					let didHit = hitResult.objectIndex >= 0;
@@ -193,6 +278,7 @@ export class LogicKernel extends ComputeKernel {
 							}
 
 							lightHits += ${ clampPathContributionFunc }( lightRec.emission * throughputColor * misWeight, input.currentBounce, clampDirect, clampIndirect );
+                            diffuseResult += lightRec.emission * diffuseThroughput * misWeight;
 							cameraHitLight = cameraHitLight || input.currentBounce == 0u;
 
 						}
@@ -202,12 +288,12 @@ export class LogicKernel extends ComputeKernel {
 					if ( didHit ) {
 
 						// stage the hit for MaterialKernel
-						rayDataStorage[ index ].barycoord = hitResult.barycoord;
-						rayDataStorage[ index ].normal = hitResult.normal;
-						rayDataStorage[ index ].side = hitResult.side;
-						rayDataStorage[ index ].indices = hitResult.indices;
-						rayDataStorage[ index ].objectIndex = hitResult.objectIndex;
-						rayDataStorage[ index ].dist = hitResult.dist;
+						${ path.write.barycoord }(index, hitResult.barycoord);
+						${ path.write.normal }(index, hitResult.normal);
+						${ path.write.side }(index, hitResult.side);
+						${ path.write.indices }(index, hitResult.indices);
+						${ path.write.objectIndex }(index, hitResult.objectIndex);
+						${ path.write.dist }(index, hitResult.dist);
 
 						// next event estimation: choose one light or the environment by its estimated
 						// contribution. MaterialKernel evaluates the bsdf and enqueues the shadow ray.
@@ -237,16 +323,16 @@ export class LogicKernel extends ComputeKernel {
 								}
 
 								lightPdf = lightRec.pdf * selectionPdf;
-								rayDataStorage[ index ].lightDirection = lightRec.direction;
-								rayDataStorage[ index ].lightEmission = lightRec.emission;
-								rayDataStorage[ index ].lightDist = lightRec.dist;
-								rayDataStorage[ index ].lightType = lightRec.lightType;
+								${ path.write.lightDirection }(index, lightRec.direction);
+								${ path.write.lightEmission }(index, lightRec.emission);
+								${ path.write.lightDist }(index, lightRec.dist);
+								${ path.write.lightType }(index, lightRec.lightType);
 
 							}
 
 						}
 
-						rayDataStorage[ index ].lightPdf = lightPdf;
+						${ path.write.lightPdf }(index, lightPdf);
 
 					} else {
 
@@ -266,6 +352,7 @@ export class LogicKernel extends ComputeKernel {
 							let environment = ${ sampleEnvColor }( input.direction ).rgb * throughputColor * misWeight;
 							let contribution = ${ clampPathContributionFunc }( environment, input.currentBounce, clampDirect, clampIndirect );
 							resultColor += vec4f( contribution, 0.0 );
+                        diffuseResult += ${ sampleEnvColor }(input.direction).rgb * diffuseThroughput * misWeight;
 
 						} else {
 
@@ -350,12 +437,14 @@ export class LogicKernel extends ComputeKernel {
 
 					// blend the finished sample into the output and free the slot for a new camera ray
 					let sampleCount = storedSamples + 1;
-					let prevColor = textureLoad( ${ params.prevOutputTarget }, colorIndex );
+					${ recordMoments }( indexUV, sampleCount, resultColor );
+					let prevColor = ${ readPreviousColorFn }( indexUV, colorIndex, storedSamples );
 					let blendedColor = ${ weightedAlphaBlendFn }( prevColor, resultColor, 1.0 / f32( sampleCount ) );
 					textureStore( ${ params.sampleCountTarget }, indexUV, vec4( ${ SAMPLE_DISPATCHED_FLAG }u | sampleCount ) );
-					textureStore( ${ params.outputTarget }, colorIndex, blendedColor );
+					${ storeColorFn }( indexUV, colorIndex, blendedColor );
+                    ${ storeDiffuse }(colorIndex, sampleCount, vec4f(diffuseResult, resultColor.a));
 
-					rayDataStorage[ index ].objectIndex = - 1;
+					${ path.write.objectIndex }(index, - 1);
 
 				} else {
 
@@ -366,13 +455,15 @@ export class LogicKernel extends ComputeKernel {
 
 					}
 
-					rayDataStorage[ index ].resultColor = resultColor;
-					rayDataStorage[ index ].throughputColor = throughputColor;
+					${ path.write.resultColor }(index, resultColor);
+					${ path.write.throughputColor }(index, throughputColor);
+                    ${ path.write.diffuseThroughput }(index, diffuseThroughput);
+                    ${ path.write.diffuseResult }(index, diffuseResult);
 
 				}
 
 			}
-		`;
+` : bindPipelineShader(shaderList.pathLogic, { storeDiffuse, writeDiffuseThroughput: path.write.diffuseThroughput, writeDiffuseResult: path.write.diffuseResult, rayIntersectionsStorage: params.rayIntersectionsStorage, shadowRayIntersectionsStorage: params.shadowRayIntersectionsStorage, rayQueue: params.rayQueue, shadowRayQueue: params.shadowRayQueue, load: path.load, rngInit: rngInit, envTotalSumNode: envTotalSumNode, envIntensityNode: envIntensityNode, lightsCountNode: lightsCountNode, getEnvWeight: getEnvWeight, isMISWeightLightFn: isMISWeightLightFn, misHeuristicFn: misHeuristicFn, clampPathContributionFunc: clampPathContributionFunc, scatterRecordStruct: scatterRecordStruct, isTerminatingScatterFunc: isTerminatingScatterFunc, lightFarDistance: LIGHT_FAR_DISTANCE, getLightsWeightFn: getLightsWeightFn, isLightVisibleToCameraFn: isLightVisibleToCameraFn, lightRecordStruct: lightRecordStruct, intersectLightAtIndexFn: intersectLightAtIndexFn, getLightWeightFn: getLightWeightFn, writeBarycoord: path.write.barycoord, writeNormal: path.write.normal, writeSide: path.write.side, writeIndices: path.write.indices, writeObjectIndex: path.write.objectIndex, writeDist: path.write.dist, rand3: rand3, rngIndexDirectLightSample: RNG_INDEX_DIRECT_LIGHT_SAMPLE, selectLightFn: selectLightFn, sampleEnvDir: sampleEnvDir, environmentLightType: ENVIRONMENT_LIGHT_TYPE, randomLightSampleFn: randomLightSampleFn, writeLightDirection: path.write.lightDirection, writeLightEmission: path.write.lightEmission, writeLightDist: path.write.lightDist, writeLightType: path.write.lightType, writeLightPdf: path.write.lightPdf, getEnvDirPdf: getEnvDirPdf, sampleEnvColor: sampleEnvColor, rand2: rand2, rngIndexBackgroundSample: RNG_INDEX_BACKGROUND_SAMPLE, sampleBackground: sampleBackground, transmissiveBackgroundEnvironment: TRANSMISSIVE_BACKGROUND_ENVIRONMENT, transmissiveBackgroundTransparent: TRANSMISSIVE_BACKGROUND_TRANSPARENT, outputTarget: params.outputTarget, sampleCountTarget: params.sampleCountTarget, sampleCountMask: SAMPLE_COUNT_MASK, recordMoments: recordMoments, readPreviousColorFn: readPreviousColorFn, weightedAlphaBlendFn: weightedAlphaBlendFn, sampleDispatchedFlag: SAMPLE_DISPATCHED_FLAG, storeColorFn: storeColorFn, writeResultColor: path.write.resultColor, writeThroughputColor: path.write.throughputColor }));
 
 		super( fn( params ) );
 

@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { storage, uniform, uniformArray, texture } from 'three/tsl';
 import { StorageBufferAttribute, HalfFloatType } from 'three/webgpu';
 import { wgslTagFn } from 'three-mesh-bvh/webgpu';
@@ -93,7 +94,7 @@ export class LightsInfoNode extends LightsInfoUniformStruct {
 		// profiles are sampled out of an atlas so filtering must resolve tile-relative wrapping
 		const sampleIesTexelFn = sampleTexelFunc( iesInfoNode, iesProfilesNode, 'sampleIesTexel' );
 
-		this.isLightVisibleToCamera = wgslTagFn/* wgsl */`
+		this.isLightVisibleToCamera = pipelineWgslTagFn(45)`
 			fn isLightVisibleToCamera( index: u32 ) -> bool {
 
 				return ${ bufferNode }[ index ].visibleToCameraRays != 0;
@@ -105,7 +106,7 @@ export class LightsInfoNode extends LightsInfoUniformStruct {
 		// the surface orientation, used to choose which light to sample.
 		// TODO: weigh lights below the surface's horizon to zero using its normal, skipped for
 		// transmissive surfaces. Forward hit MIS would then need the previous vertex's normal too.
-		this.getLightWeight = wgslTagFn/* wgsl */`
+		this.getLightWeight = pipelineWgslTagFn(46)`
 			fn getLightWeight( index: u32, position: vec3f ) -> f32 {
 
 				let light = ${ bufferNode }[ index ];
@@ -155,7 +156,7 @@ export class LightsInfoNode extends LightsInfoUniformStruct {
 			}
 		`;
 
-		this.getLightsWeight = wgslTagFn/* wgsl */`
+		this.getLightsWeight = pipelineWgslTagFn(47)`
 			fn getLightsWeight( position: vec3f ) -> f32 {
 
 				var total = 0.0;
@@ -172,7 +173,7 @@ export class LightsInfoNode extends LightsInfoUniformStruct {
 
 		// Chooses a light, or the environment when the returned index equals the light count, in
 		// proportion to the estimated weights. The pdf is zero when nothing can light the position.
-		this.selectLight = wgslTagFn/* wgsl */`
+		this.selectLight = pipelineWgslTagFn(48)`
 			fn selectLight( position: vec3f, envWeight: f32, r: f32, selectionPdf: ptr<function, f32> ) -> u32 {
 
 				let count = ${ countNode };
@@ -228,7 +229,7 @@ export class LightsInfoNode extends LightsInfoUniformStruct {
 		`;
 
 		// sample the light at the given index
-		this.randomLightSample = wgslTagFn/* wgsl */`
+		this.randomLightSample = pipelineWgslTagFn(49)`
 			fn randomLightSample( lightIndex: u32, rayOrigin: vec3f, ruv: vec2f ) -> ${ lightRecordStruct } {
 
 				let light = ${ bufferNode }[ lightIndex ];
@@ -304,7 +305,7 @@ export class LightsInfoNode extends LightsInfoUniformStruct {
 		// forward intersection of a ray with a single area light ( rect / circ only ), used for MIS
 		// TODO: support hitting the spot light disk here and move spot lights into the
 		// MIS-weighted set so they appear in sharp reflections
-		this.intersectLightAtIndex = wgslTagFn/* wgsl */`
+		this.intersectLightAtIndex = pipelineWgslTagFn(50)`
 			fn intersectLightAtIndex( rayOrigin: vec3f, rayDirection: vec3f, index: u32, lightRec: ptr<function, ${ lightRecordStruct }> ) -> bool {
 
 				let light = ${ bufferNode }[ index ];

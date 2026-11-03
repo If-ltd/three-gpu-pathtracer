@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { texture, vec4 } from 'three/tsl';
 import { wgslTagFn } from 'three-mesh-bvh/webgpu';
 import { rand4, rngInit, rngNextBounce } from './sobol.wgsl.js';
@@ -26,7 +27,7 @@ const pixelSeed = vec4( 0 ).toVar( 'blueDitherSeed' );
 
 // When dithering, the sobol sampler is seeded with a constant pixel so every pixel
 // uses the same sequence, which is modified with the per-pixel blue noise sample.
-const blueDitherInitFunc = wgslTagFn/* wgsl */`
+const blueDitherInitFunc = pipelineWgslTagFn(169)`
 	fn blueDitherInitialize( pixel: vec2u, pathIndex: u32, bounceIndex: u32 ) -> void {
 
 		let coord = vec2i( pixel % vec2u( ${ BN_SIZE }u ) );
@@ -36,7 +37,7 @@ const blueDitherInitFunc = wgslTagFn/* wgsl */`
 	}
 `;
 
-const blueDitherNextBounceFunc = wgslTagFn/* wgsl */`
+const blueDitherNextBounceFunc = pipelineWgslTagFn(170)`
 	fn blueDitherNextBounce() -> void {
 
 		${ rngNextBounce }();
@@ -46,7 +47,7 @@ const blueDitherNextBounceFunc = wgslTagFn/* wgsl */`
 
 // The per-pixel scalar is rotated by the golden ratio per dimension. Apply a per-dimension
 // offset to reduce the corelation of the sequence.
-const blueDitherRand4Func = wgslTagFn/* wgsl */`
+const blueDitherRand4Func = pipelineWgslTagFn(171)`
 	fn blueDitherRand4( effect: u32 ) -> vec4f {
 
 		// Get the scrambled sobol stratified sample
@@ -58,7 +59,7 @@ const blueDitherRand4Func = wgslTagFn/* wgsl */`
 	}
 `;
 
-const blueDitherRand3Func = wgslTagFn/* wgsl */`
+const blueDitherRand3Func = pipelineWgslTagFn(172)`
 	fn blueDitherRand3( effect: u32 ) -> vec3f {
 
 		return ${ blueDitherRand4Func }( effect ).xyz;
@@ -66,7 +67,7 @@ const blueDitherRand3Func = wgslTagFn/* wgsl */`
 	}
 `;
 
-const blueDitherRand2Func = wgslTagFn/* wgsl */`
+const blueDitherRand2Func = pipelineWgslTagFn(173)`
 	fn blueDitherRand2( effect: u32 ) -> vec2f {
 
 		return ${ blueDitherRand4Func }( effect ).xy;
@@ -74,7 +75,7 @@ const blueDitherRand2Func = wgslTagFn/* wgsl */`
 	}
 `;
 
-const blueDitherRand1Func = wgslTagFn/* wgsl */`
+const blueDitherRand1Func = pipelineWgslTagFn(174)`
 	fn blueDitherRand1( effect: u32 ) -> f32 {
 
 		return ${ blueDitherRand4Func }( effect ).x;

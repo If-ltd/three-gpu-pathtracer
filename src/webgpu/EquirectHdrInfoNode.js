@@ -1,3 +1,4 @@
+import { pipelineWgslFn, pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { Matrix3 } from 'three/webgpu';
 import { texture, sampler, uniform, wgslFn, PI } from 'three/tsl';
 import { EquirectHdrInfoUniform } from '../uniforms/EquirectHdrInfoUniform.js';
@@ -6,15 +7,7 @@ import { constants, environmentSampleStruct } from './nodes/structs.wgsl.js';
 import { equirectDirectionToUvFn, equirectUvToDirectionFn, luminanceFn } from './nodes/sampling.wgsl.js';
 
 // totalWeight includes sin( theta ), which cancels in the solid-angle conversion.
-const equirectLuminancePdfFn = wgslFn( /* wgsl */ `
-
-	fn equirectLuminancePdf( luminance: f32, totalWeight: f32, resolution: vec2u ) -> f32 {
-
-		return f32( resolution.x * resolution.y ) * luminance / ( 2.0 * PI * PI * totalWeight );
-
-	}
-
-`, [ constants ] );
+const equirectLuminancePdfFn = pipelineWgslFn(40, ["\n\n\tfn equirectLuminancePdf( luminance: f32, totalWeight: f32, resolution: vec2u ) -> f32 {\n\n\t\treturn f32( resolution.x * resolution.y ) * luminance / ( 2.0 * PI * PI * totalWeight );\n\n\t}\n\n"], [], [ constants ]);
 
 export class EquirectHdrInfoNode extends EquirectHdrInfoUniform {
 
@@ -80,7 +73,7 @@ export class EquirectHdrInfoNode extends EquirectHdrInfoUniform {
 			intensityNode,
 		} = this;
 
-		this.sampleColor = wgslTagFn/* wgsl */`
+		this.sampleColor = pipelineWgslTagFn(41)`
 			fn sampleEnv( direction: vec3f ) -> vec4f {
 
 				let sampleDir = ${ rotationNode } * direction;
@@ -92,7 +85,7 @@ export class EquirectHdrInfoNode extends EquirectHdrInfoUniform {
 			}
 		`;
 
-		this.sampleDir = wgslTagFn/* wgsl */`
+		this.sampleDir = pipelineWgslTagFn(42)`
 			fn sampleEnvDir( r: vec2f ) -> ${ environmentSampleStruct } {
 
 				var result: ${ environmentSampleStruct };
@@ -127,7 +120,7 @@ export class EquirectHdrInfoNode extends EquirectHdrInfoUniform {
 		`;
 
 		// the environment's average irradiance, for weighing it against the lights
-		this.getWeight = wgslTagFn/* wgsl */`
+		this.getWeight = pipelineWgslTagFn(43)`
 			fn getEnvWeight() -> f32 {
 
 				let resolution = textureDimensions( ${ mapNode } );
@@ -136,7 +129,7 @@ export class EquirectHdrInfoNode extends EquirectHdrInfoUniform {
 			}
 		`;
 
-		this.getDirPdf = wgslTagFn/* wgsl */`
+		this.getDirPdf = pipelineWgslTagFn(44)`
 			fn getEnvDirPdf( direction: vec3f ) -> f32 {
 
 				if ( ${ totalSumNode } == 0.0 ) {

@@ -77,6 +77,7 @@ export class ComputeKernel {
 		// release the renderer's pipeline and bindings for the kernel being replaced
 		this.kernel?.dispose();
 		this.kernel = node.computeKernel( [ x, y, z ] );
+		this.kernel.name = this.constructor.name;
 		return this;
 
 	}

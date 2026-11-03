@@ -1,3 +1,5 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
+import { bindPipelineShader } from './pipeline-shader.js';
 import { StorageBufferAttribute } from 'three/webgpu';
 import { ComputeKernel } from '../ComputeKernel.js';
 import { storage, globalId } from 'three/tsl';
@@ -9,7 +11,7 @@ import { rayQueueStruct, intersectionResultStruct } from './structs.js';
 // intersection result at the ray's queue index for LogicKernel to consume next frame.
 export class TraceRayKernel extends ComputeKernel {
 
-	constructor( ) {
+	constructor(shaderList) {
 
 		const params = {
 			bvhData: { value: null },
@@ -23,7 +25,7 @@ export class TraceRayKernel extends ComputeKernel {
 		const raycastOutput = proxy( 'bvhData.value.fns.raycastFirstHit.outputType', params );
 		const raycastFirstHitFn = proxy( 'bvhData.value.fns.raycastFirstHit', params );
 
-		const fn = wgslTagFn /* wgsl */`
+		const fn = (shaderList === undefined ? pipelineWgslTagFn(85)`
 
 			fn compute( globalId: vec3u ) -> void {
 
@@ -60,7 +62,7 @@ export class TraceRayKernel extends ComputeKernel {
 				}
 
 			}
-		`;
+		` : bindPipelineShader(shaderList.traceRay, { rayQueue: params.rayQueue, rayIntersectionsStorage: params.rayIntersectionsStorage, rngInit: rngInit, raycastOutput: raycastOutput, raycastFirstHitFn: raycastFirstHitFn }));
 
 		super( fn( params ) );
 

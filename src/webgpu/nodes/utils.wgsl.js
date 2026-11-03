@@ -1,310 +1,58 @@
+import { pipelineWgslFn, pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { wgslFn } from 'three/tsl';
 import { scatterRecordStruct } from './structs.wgsl.js';
 import { wgslTagFn } from 'three-mesh-bvh/webgpu';
 
-export const inverseMat3x3Func = wgslFn( /* wgsl */ `
+export const inverseMat3x3Func = pipelineWgslFn(215, ["\n\n\tfn inverse(m: mat3x3f) -> mat3x3f {\n\t\tvar adj: mat3x3f;\n\t\tadj[0][0] =   (m[1][1] * m[2][2] - m[2][1] * m[1][2]);\n\t\tadj[1][0] = - (m[1][0] * m[2][2] - m[2][0] * m[1][2]);\n\t\tadj[2][0] =   (m[1][0] * m[2][1] - m[2][0] * m[1][1]);\n\t\tadj[0][1] = - (m[0][1] * m[2][2] - m[2][1] * m[0][2]);\n\t\tadj[1][1] =   (m[0][0] * m[2][2] - m[2][0] * m[0][2]);\n\t\tadj[2][1] = - (m[0][0] * m[2][1] - m[2][0] * m[0][1]);\n\t\tadj[0][2] =   (m[0][1] * m[1][2] - m[1][1] * m[0][2]);\n\t\tadj[1][2] = - (m[0][0] * m[1][2] - m[1][0] * m[0][2]);\n\t\tadj[2][2] =   (m[0][0] * m[1][1] - m[1][0] * m[0][1]);\n\n\t\tlet det = ( m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])\n\t\t\t- m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])\n\t\t\t+ m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]));\n\n\t\treturn adj * ( 1.0 / det );\n\t}\n\n"], [], []);
 
-	fn inverse(m: mat3x3f) -> mat3x3f {
-		var adj: mat3x3f;
-		adj[0][0] =   (m[1][1] * m[2][2] - m[2][1] * m[1][2]);
-		adj[1][0] = - (m[1][0] * m[2][2] - m[2][0] * m[1][2]);
-		adj[2][0] =   (m[1][0] * m[2][1] - m[2][0] * m[1][1]);
-		adj[0][1] = - (m[0][1] * m[2][2] - m[2][1] * m[0][2]);
-		adj[1][1] =   (m[0][0] * m[2][2] - m[2][0] * m[0][2]);
-		adj[2][1] = - (m[0][0] * m[2][1] - m[2][0] * m[0][1]);
-		adj[0][2] =   (m[0][1] * m[1][2] - m[1][1] * m[0][2]);
-		adj[1][2] = - (m[0][0] * m[1][2] - m[1][0] * m[0][2]);
-		adj[2][2] =   (m[0][0] * m[1][1] - m[1][0] * m[0][1]);
+export const getBasisFromNormalFunc = pipelineWgslFn(216, ["\n\n\tfn getBasisFromNormal( normal: vec3f ) -> mat3x3f {\n\n\t\tvar other: vec3f;\n\t\tif ( abs( normal.x ) > 0.5 ) {\n\n\t\t\tother = vec3f( 0.0, 1.0, 0.0 );\n\n\t\t} else {\n\n\t\t\tother = vec3f( 1.0, 0.0, 0.0 );\n\n\t\t}\n\n\t\tlet ortho = normalize( cross( normal, other ) );\n\t\tlet ortho2 = normalize( cross( normal, ortho ) );\n\t\treturn mat3x3f( ortho2, ortho, normal );\n\n\t}\n\n"], [], []);
 
-		let det = ( m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
-			- m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
-			+ m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]));
+export const iorToF0Func = pipelineWgslFn(217, ["\n\n\tfn iorToF0( ior: f32 ) -> f32 {\n\t\treturn pow( ( 1 - ior ) / ( 1 + ior ), 2 );\n\t}\n\n"], [], []);
 
-		return adj * ( 1.0 / det );
-	}
+export const iorToF0GeneralFunc = pipelineWgslFn(218, ["\n\n\tfn iorToF0General( transmittedIor: f32, incidentIor: f32 ) -> f32 {\n\n\t\treturn pow( ( transmittedIor - incidentIor ) / ( transmittedIor + incidentIor ), 2 );\n\n\t}\n\n"], [], []);
 
-` );
+export const iorToF0GeneralVecFunc = pipelineWgslFn(219, ["\n\n\tfn iorToF0GeneralVec( transmittedIor: vec3f, incidentIor: vec3f ) -> vec3f {\n\n\t\tlet v = ( transmittedIor - incidentIor ) / ( transmittedIor + incidentIor );\n\t\treturn v * v;\n\n\t}\n\n"], [], []);
 
-export const getBasisFromNormalFunc = wgslFn( /* wgsl */ `
+export const fresnel0ToIorFunc = pipelineWgslFn(220, ["\n\n\tfn fresnel0ToIor( f0: vec3f ) -> vec3f {\n\n\t\tlet sqrtF0 = sqrt( f0 );\n\t\treturn ( vec3( 1.0 ) + sqrtF0 ) / ( vec3( 1.0 ) - sqrtF0 );\n\n\t}\n\n"], [], []);
 
-	fn getBasisFromNormal( normal: vec3f ) -> mat3x3f {
+export const schlickFresnelFunc = pipelineWgslFn(221, ["\n\n\tfn schlickFresnel( cosine: f32, f0: f32 ) -> f32 {\n\n\t\treturn f0 + ( 1.0 - f0 ) * pow( 1.0 - cosine, 5.0 );\n\n\t}\n\n"], [], []);
 
-		var other: vec3f;
-		if ( abs( normal.x ) > 0.5 ) {
+export const schlickFresnelVecFunc = pipelineWgslFn(222, ["\n\n\tfn schlickFresnelVec( cosine: f32, f0: vec3f, f90: vec3f ) -> vec3f {\n\n\t\treturn f0 + ( f90 - f0 ) * pow( 1.0 - cosine, 5.0 );\n\n\t}\n\n"], [], []);
 
-			other = vec3f( 0.0, 1.0, 0.0 );
+export const totalInternalReflectionFunc = pipelineWgslFn(223, ["\n\n\tfn totalInternalReflection( cosTheta: f32, eta: f32 ) -> bool {\n\n\t\tlet sinTheta = sqrt( 1.0 - cosTheta * cosTheta );\n\t\treturn eta * sinTheta > 1.0;\n\n\t}\n\n"], [], []);
 
-		} else {
+export const totalInternalReflectionVecFunc = pipelineWgslFn(224, ["\n\n\tfn totalInternalReflectionVec( cosTheta: f32, eta: vec3f ) -> vec3<bool> {\n\n\t\tlet sinTheta = sqrt( 1.0 - cosTheta * cosTheta );\n\t\treturn eta * sinTheta > vec3f( 1.0 );\n\n\t}\n\n"], [], []);
 
-			other = vec3f( 1.0, 0.0, 0.0 );
+export const evaluateFresnelFunc = pipelineWgslFn(225, ["\n\n\tfn evaluateFresnel( cosine: f32, eta: f32, f0: vec3f, f90: vec3f ) -> vec3f {\n\n\t\tif ( totalInternalReflection( cosine, eta ) ) {\n\n\t\t\treturn f90;\n\n\t\t}\n\n\t\treturn f0 + ( f90 - f0 ) * pow( 1.0 - cosine, 5.0 );\n\t}\n\n"], [], [ totalInternalReflectionFunc ]);
 
-		}
+export const dielectricFresnelFunc = pipelineWgslFn(226, ["\n\n\tfn dielectricFresnel( cosThetaI: f32, eta: f32 ) -> f32 {\n\n\t\t// https://schuttejoe.github.io/post/disneybsdf/\n\t\tlet ni = eta;\n\t\tlet nt = 1.0;\n\n\t\t// Check for total internal reflection\n\t\tlet sinThetaISq = 1.0 - cosThetaI * cosThetaI;\n\t\tlet sinThetaTSq = eta * eta * sinThetaISq;\n\t\tif ( sinThetaTSq >= 1.0 ) {\n\n\t\t\treturn 1.0;\n\n\t\t}\n\n\t\tlet sinThetaT = sqrt( sinThetaTSq );\n\t\tlet cosThetaT = sqrt( max( 0.0, 1.0 - sinThetaT * sinThetaT ) );\n\t\tlet rParallel = ( ( nt * cosThetaI ) - ( ni * cosThetaT ) ) / ( ( nt * cosThetaI ) + ( ni * cosThetaT ) );\n\t\tlet rPerpendicular = ( ( ni * cosThetaI ) - ( nt * cosThetaT ) ) / ( ( ni * cosThetaI ) + ( nt * cosThetaT ) );\n\t\treturn ( rParallel * rParallel + rPerpendicular * rPerpendicular ) / 2.0;\n\n\t}\n\n"], [], []);
 
-		let ortho = normalize( cross( normal, other ) );
-		let ortho2 = normalize( cross( normal, ortho ) );
-		return mat3x3f( ortho2, ortho, normal );
+export const disneyFresnelFunc = pipelineWgslFn(227, ["\n\n\tfn disneyFresnel( wo: vec3f, wi: vec3f, wh: vec3f, f0: f32, eta: f32, metalness: f32 ) -> f32 {\n\n\t\tlet dotHV = dot( wo, wh );\n\t\tif ( totalInternalReflection( dotHV, eta ) ) {\n\n\t\t\treturn 1.0;\n\n\t\t}\n\n\t\tlet dotHL = dot( wi, wh );\n\t\tlet dielectricF = dielectricFresnel( abs( dotHV ), eta );\n\t\tlet metallicF = schlickFresnel( dotHL, f0 );\n\n\t\treturn mix( dielectricF, metallicF, metalness );\n\n\t}\n\n"], [], [ totalInternalReflectionFunc, dielectricFresnelFunc, schlickFresnelFunc ]);
 
-	}
-
-` );
-
-export const iorToF0Func = wgslFn( /* wgsl */ `
-
-	fn iorToF0( ior: f32 ) -> f32 {
-		return pow( ( 1 - ior ) / ( 1 + ior ), 2 );
-	}
-
-` );
-
-export const iorToF0GeneralFunc = wgslFn( /* wgsl */ `
-
-	fn iorToF0General( transmittedIor: f32, incidentIor: f32 ) -> f32 {
-
-		return pow( ( transmittedIor - incidentIor ) / ( transmittedIor + incidentIor ), 2 );
-
-	}
-
-` );
-
-export const iorToF0GeneralVecFunc = wgslFn( /* wgsl */ `
-
-	fn iorToF0GeneralVec( transmittedIor: vec3f, incidentIor: vec3f ) -> vec3f {
-
-		let v = ( transmittedIor - incidentIor ) / ( transmittedIor + incidentIor );
-		return v * v;
-
-	}
-
-` );
-
-export const fresnel0ToIorFunc = wgslFn( /* wgsl */ `
-
-	fn fresnel0ToIor( f0: vec3f ) -> vec3f {
-
-		let sqrtF0 = sqrt( f0 );
-		return ( vec3( 1.0 ) + sqrtF0 ) / ( vec3( 1.0 ) - sqrtF0 );
-
-	}
-
-` );
-
-export const schlickFresnelFunc = wgslFn( /* wgsl */ `
-
-	fn schlickFresnel( cosine: f32, f0: f32 ) -> f32 {
-
-		return f0 + ( 1.0 - f0 ) * pow( 1.0 - cosine, 5.0 );
-
-	}
-
-` );
-
-export const schlickFresnelVecFunc = wgslFn( /* wgsl */ `
-
-	fn schlickFresnelVec( cosine: f32, f0: vec3f, f90: vec3f ) -> vec3f {
-
-		return f0 + ( f90 - f0 ) * pow( 1.0 - cosine, 5.0 );
-
-	}
-
-` );
-
-export const totalInternalReflectionFunc = wgslFn( /* wgsl */ `
-
-	fn totalInternalReflection( cosTheta: f32, eta: f32 ) -> bool {
-
-		let sinTheta = sqrt( 1.0 - cosTheta * cosTheta );
-		return eta * sinTheta > 1.0;
-
-	}
-
-` );
-
-export const totalInternalReflectionVecFunc = wgslFn( /* wgsl */ `
-
-	fn totalInternalReflectionVec( cosTheta: f32, eta: vec3f ) -> vec3<bool> {
-
-		let sinTheta = sqrt( 1.0 - cosTheta * cosTheta );
-		return eta * sinTheta > vec3f( 1.0 );
-
-	}
-
-` );
-
-export const evaluateFresnelFunc = wgslFn( /* wgsl */ `
-
-	fn evaluateFresnel( cosine: f32, eta: f32, f0: vec3f, f90: vec3f ) -> vec3f {
-
-		if ( totalInternalReflection( cosine, eta ) ) {
-
-			return f90;
-
-		}
-
-		return f0 + ( f90 - f0 ) * pow( 1.0 - cosine, 5.0 );
-	}
-
-`, [ totalInternalReflectionFunc ] );
-
-export const dielectricFresnelFunc = wgslFn( /* wgsl */ `
-
-	fn dielectricFresnel( cosThetaI: f32, eta: f32 ) -> f32 {
-
-		// https://schuttejoe.github.io/post/disneybsdf/
-		let ni = eta;
-		let nt = 1.0;
-
-		// Check for total internal reflection
-		let sinThetaISq = 1.0 - cosThetaI * cosThetaI;
-		let sinThetaTSq = eta * eta * sinThetaISq;
-		if ( sinThetaTSq >= 1.0 ) {
-
-			return 1.0;
-
-		}
-
-		let sinThetaT = sqrt( sinThetaTSq );
-		let cosThetaT = sqrt( max( 0.0, 1.0 - sinThetaT * sinThetaT ) );
-		let rParallel = ( ( nt * cosThetaI ) - ( ni * cosThetaT ) ) / ( ( nt * cosThetaI ) + ( ni * cosThetaT ) );
-		let rPerpendicular = ( ( ni * cosThetaI ) - ( nt * cosThetaT ) ) / ( ( ni * cosThetaI ) + ( nt * cosThetaT ) );
-		return ( rParallel * rParallel + rPerpendicular * rPerpendicular ) / 2.0;
-
-	}
-
-` );
-
-export const disneyFresnelFunc = wgslFn( /* wgsl */ `
-
-	fn disneyFresnel( wo: vec3f, wi: vec3f, wh: vec3f, f0: f32, eta: f32, metalness: f32 ) -> f32 {
-
-		let dotHV = dot( wo, wh );
-		if ( totalInternalReflection( dotHV, eta ) ) {
-
-			return 1.0;
-
-		}
-
-		let dotHL = dot( wi, wh );
-		let dielectricF = dielectricFresnel( abs( dotHV ), eta );
-		let metallicF = schlickFresnel( dotHL, f0 );
-
-		return mix( dielectricF, metallicF, metalness );
-
-	}
-
-`, [ totalInternalReflectionFunc, dielectricFresnelFunc, schlickFresnelFunc ] );
-
-export const isTerminatingScatterFunc = wgslFn( /* wgsl */ `
-
-	fn isTerminatingScatter( scatterRec: ScatterRecord ) -> bool {
-
-		return scatterRec.pdf <= 0;
-
-	}
-
-`, [ scatterRecordStruct ] );
+export const isTerminatingScatterFunc = pipelineWgslFn(228, ["\n\n\tfn isTerminatingScatter( scatterRec: ScatterRecord ) -> bool {\n\n\t\treturn scatterRec.pdf <= 0;\n\n\t}\n\n"], [], [ scatterRecordStruct ]);
 
 // Clamp individual light-path contributions using Cycles' RGB sum while preserving chromaticity.
 // Matches film_clamp_light in Cycles' kernel/film/light_passes.h, including the x3 limit
 // scaling applied to the user-facing clamp values in scene/integrator.cpp.
-export const clampPathContributionFunc = wgslFn( /* wgsl */ `
+export const clampPathContributionFunc = pipelineWgslFn(229, ["\n\n\tfn clampPathContribution( contribution: vec3f, pathDepth: u32, clampDirect: f32, clampIndirect: f32 ) -> vec3f {\n\n\t\tlet limit = select( clampIndirect, clampDirect, pathDepth <= 1u ) * 3.0;\n\t\tif ( limit <= 0.0 ) {\n\n\t\t\treturn contribution;\n\n\t\t}\n\n\t\tlet strength = dot( abs( contribution ), vec3f( 1.0 ) );\n\t\tif ( strength > limit ) {\n\n\t\t\treturn contribution * ( limit / strength );\n\n\t\t}\n\n\t\treturn contribution;\n\n\t}\n\n"], [], []);
 
-	fn clampPathContribution( contribution: vec3f, pathDepth: u32, clampDirect: f32, clampIndirect: f32 ) -> vec3f {
-
-		let limit = select( clampIndirect, clampDirect, pathDepth <= 1u ) * 3.0;
-		if ( limit <= 0.0 ) {
-
-			return contribution;
-
-		}
-
-		let strength = dot( abs( contribution ), vec3f( 1.0 ) );
-		if ( strength > limit ) {
-
-			return contribution * ( limit / strength );
-
-		}
-
-		return contribution;
-
-	}
-
-` );
-
-export const applyWrapFunc = wgslFn( /* wgsl */ `
-
-	fn applyWrap( v: f32, wrapMode: i32 ) -> f32 {
-
-		var res = v;
-		if ( wrapMode == 1 ) {
-
-			// ClampToEdge
-			res = clamp( res, 0.0, 1.0 );
-
-		} else if ( wrapMode == 2 ) {
-
-			// MirroredRepeat
-			res = 1.0 - abs( 2.0 * fract( res * 0.5 ) - 1.0 );
-
-		} else {
-
-			// Repeat
-			res = fract( res );
-
-		}
-
-		return res;
-
-	}
-
-` );
+export const applyWrapFunc = pipelineWgslFn(230, ["\n\n\tfn applyWrap( v: f32, wrapMode: i32 ) -> f32 {\n\n\t\tvar res = v;\n\t\tif ( wrapMode == 1 ) {\n\n\t\t\t// ClampToEdge\n\t\t\tres = clamp( res, 0.0, 1.0 );\n\n\t\t} else if ( wrapMode == 2 ) {\n\n\t\t\t// MirroredRepeat\n\t\t\tres = 1.0 - abs( 2.0 * fract( res * 0.5 ) - 1.0 );\n\n\t\t} else {\n\n\t\t\t// Repeat\n\t\t\tres = fract( res );\n\n\t\t}\n\n\t\treturn res;\n\n\t}\n\n"], [], []);
 
 // Bit-level ray origin offset based on Section 6.2.2 of "A Fast and Robust
 // Method for Avoiding Self-Intersection" in Ray Tracing Gems:
 // https://github.com/Apress/ray-tracing-gems/blob/master/Ch_06_A_Fast_and_Robust_Method_for_Avoiding_Self-Intersection/offset_ray.cu
 // The original implementation expects a normal oriented for the outgoing ray;
 // this version orients the geometric normal internally.
-export const offsetRayOriginFunc = wgslFn( /* wgsl */ `
-
-	fn offsetRayOrigin( point: vec3f, direction: vec3f, geometricNormal: vec3f ) -> vec3f {
-
-		let normal = normalize( select( -geometricNormal, geometricNormal, dot( direction, geometricNormal ) >= 0.0 ) );
-		let intScale = 256.0;
-		let integerOffset = vec3i( intScale * normal );
-		let pointBits = bitcast<vec3i>( point );
-		let signedOffset = select( integerOffset, -integerOffset, point < vec3f( 0.0 ) );
-		let offsetPoint = bitcast<vec3f>( pointBits + signedOffset );
-		let origin = 1.0 / 32.0;
-		let floatScale = 1.0 / 65536.0;
-		return select( offsetPoint, point + floatScale * normal, abs( point ) < vec3f( origin ) );
-
-	}
-
-` );
+export const offsetRayOriginFunc = pipelineWgslFn(231, ["\n\n\tfn offsetRayOrigin( point: vec3f, direction: vec3f, geometricNormal: vec3f ) -> vec3f {\n\n\t\tlet normal = normalize( select( -geometricNormal, geometricNormal, dot( direction, geometricNormal ) >= 0.0 ) );\n\t\tlet intScale = 256.0;\n\t\tlet integerOffset = vec3i( intScale * normal );\n\t\tlet pointBits = bitcast<vec3i>( point );\n\t\tlet signedOffset = select( integerOffset, -integerOffset, point < vec3f( 0.0 ) );\n\t\tlet offsetPoint = bitcast<vec3f>( pointBits + signedOffset );\n\t\tlet origin = 1.0 / 32.0;\n\t\tlet floatScale = 1.0 / 65536.0;\n\t\treturn select( offsetPoint, point + floatScale * normal, abs( point ) < vec3f( origin ) );\n\n\t}\n\n"], [], []);
 
 // Wraps a bilinear tap that is off the edge of a tile back to the texel the wrap mode calls for
-export const wrapTexelIndexFunc = wgslFn( /* wgsl */ `
-
-	fn wrapTexelIndex( i: i32, size: i32, wrapMode: i32 ) -> i32 {
-
-		if ( wrapMode == 0 ) {
-
-			// Repeat wraps to the opposite edge
-			return ( ( i % size ) + size ) % size;
-
-		}
-
-		// ClampToEdge and MirroredRepeat both fold back onto the edge texel
-		return clamp( i, 0, size - 1 );
-
-	}
-
-` );
+export const wrapTexelIndexFunc = pipelineWgslFn(232, ["\n\n\tfn wrapTexelIndex( i: i32, size: i32, wrapMode: i32 ) -> i32 {\n\n\t\tif ( wrapMode == 0 ) {\n\n\t\t\t// Repeat wraps to the opposite edge\n\t\t\treturn ( ( i % size ) + size ) % size;\n\n\t\t}\n\n\t\t// ClampToEdge and MirroredRepeat both fold back onto the edge texel\n\t\treturn clamp( i, 0, size - 1 );\n\n\t}\n\n"], [], []);
 
 // Factory: builds sampleTexel bound to the given per-instance textureInfo uniform
 // array node ( must be named "textureInfo" ). Called once per scene so a single
 // sampleTexel / textureInfo binding is shared by every caller in a pipeline. A distinct
 // name must be given when a second atlas binding is used in the same pipeline.
-export const sampleTexelFunc = ( textureInfoUniform, atlas, name = 'sampleTexel' ) => wgslTagFn/* wgsl */ `
+export const sampleTexelFunc = ( textureInfoUniform, atlas, name = 'sampleTexel' ) => pipelineWgslTagFn(233)`
 
 	fn ${ name }( uv: vec2f, packed: i32, lod: f32 ) -> vec4f {
 

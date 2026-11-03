@@ -1,9 +1,10 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { Matrix4, StructTypeNode } from 'three/webgpu';
 import { uniform, uint, float } from 'three/tsl';
 import { wgslTagFn, ndcToCameraRay, rayStruct, bvhNodeBoundsStruct, bvhNodeStruct, intersectsTriangle } from 'three-mesh-bvh/webgpu';
 
 // blue -> cyan -> green -> yellow -> red heat ramp shared by the debug visualizations
-export const heatColorFn = wgslTagFn/* wgsl */`
+export const heatColorFn = pipelineWgslTagFn(115)`
 	fn debugHeatColor( t: f32 ) -> vec3f {
 
 		let r = clamp( 1.5 - abs( 4.0 * t - 3.0 ), 0.0, 1.0 );
@@ -53,7 +54,7 @@ export function getDebugBoundsFunction( bvhData ) {
 	const materialSide = float( 0.0 ).toVar( 'bvh_debugMaterialSide' );
 
 	// front-to-back child ordering: descend the child the ray reaches first
-	const getBoundsOrder = wgslTagFn/* wgsl */`
+	const getBoundsOrder = pipelineWgslTagFn(116)`
 		fn debugGetBoundsOrder( ray: ${ rayStruct }, splitAxis: u32, node: ${ bvhNodeStruct } ) -> bool {
 
 			return ray.direction[ splitAxis ] >= 0.0;
@@ -63,7 +64,7 @@ export function getDebugBoundsFunction( bvhData ) {
 
 	// bounds hook: tally the box (into the level's counter) and keep descending, unless it sits
 	// entirely behind the nearest hit surface found so far
-	const intersectsBounds = wgslTagFn/* wgsl */`
+	const intersectsBounds = pipelineWgslTagFn(117)`
 		fn debugIntersectsBounds( ray: ${ rayStruct }, bounds: ${ bvhNodeBoundsStruct }, result: ptr<function, ${ debugBoundsResultStruct }> ) -> u32 {
 
 			let boundsMin = vec3( bounds.min[ 0 ], bounds.min[ 1 ], bounds.min[ 2 ] );
@@ -106,7 +107,7 @@ export function getDebugBoundsFunction( bvhData ) {
 	`;
 
 	// range hook: intersect the leaf triangles to track the nearest surface
-	const intersectRange = wgslTagFn/* wgsl */`
+	const intersectRange = pipelineWgslTagFn(118)`
 		fn debugIntersectRange( ray: ${ rayStruct }, offset: u32, count: u32, result: ptr<function, ${ debugBoundsResultStruct }> ) -> bool {
 
 			var didHit = false;
@@ -151,7 +152,7 @@ export function getDebugBoundsFunction( bvhData ) {
 	// transform hook: move the ray into object-local space ( normalizing the direction and storing
 	// the scale factor, exactly like the raycast ), record the material side, and mark that we are
 	// now descending a BLAS
-	const transformRay = wgslTagFn/* wgsl */`
+	const transformRay = pipelineWgslTagFn(119)`
 		fn debugTransformRay( ray: ptr<function, ${ rayStruct }>, objectIndex: u32 ) -> void {
 
 			let object = ${ transforms }[ objectIndex ];
@@ -170,7 +171,7 @@ export function getDebugBoundsFunction( bvhData ) {
 	`;
 
 	// reset hook: back to the TLAS once a BLAS has been fully traversed
-	const resetLevel = wgslTagFn/* wgsl */`
+	const resetLevel = pipelineWgslTagFn(120)`
 		fn debugResetLevel( objectIndex: u32 ) -> void {
 
 			${ rayScalar } = 1.0;
@@ -192,7 +193,7 @@ export function getDebugBoundsFunction( bvhData ) {
 		resetShapeFn: resetLevel,
 	} );
 
-	const debugBounds = wgslTagFn/* wgsl */`
+	const debugBounds = pipelineWgslTagFn(121)`
 		fn debugBounds( vUv: vec2f ) -> vec4f {
 
 			let ndc = vUv * 2.0 - vec2f( 1.0 );

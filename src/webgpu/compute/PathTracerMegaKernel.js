@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { DataTexture, Vector2, StorageTexture } from 'three/webgpu';
 import { ComputeKernel } from './ComputeKernel.js';
 import { texture, sampler, uniform, globalId, textureStore } from 'three/tsl';
@@ -77,7 +78,7 @@ export class PathTracerMegaKernel extends ComputeKernel {
 		const selectLightFn = proxyFn( 'lightsInfo.value.selectLight', params );
 		const isLightVisibleToCameraFn = proxyFn( 'lightsInfo.value.isLightVisibleToCamera', params );
 
-		const shader = wgslTagFn/* wgsl */`
+		const shader = pipelineWgslTagFn(57)`
 
 			fn compute(
 

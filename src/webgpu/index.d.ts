@@ -129,6 +129,10 @@ export class OIDNDenoiser {
 // path tracer
 
 export interface SampleCounts {
+    /** Completion metric; min/max/avg remain actual samples. */
+    convergedMin?: number;
+    activePixels?: number;
+    adaptiveStage?: number;
 
 	min: number;
 	max: number;
@@ -157,10 +161,12 @@ export interface DebugBoundsOptions {
 
 export class WebGPUPathTracer {
 
-	constructor( renderer: WebGPURenderer );
+	constructor( renderer: WebGPURenderer, options?: { sparseAccumulation?: boolean; adaptiveSampling?: boolean; pathStateLayout?: 'aos' | 'soa'; sortMaterialPaths?: boolean; pruneZeroContribution?: boolean; captureDiffuse?: boolean; pipelineShaders?: { adaptiveSampling: string; materialQueue: string; copyPathState: string; wavefront: Readonly<Record<string, string>> } } );
 
 	maxBounces: number;
 	frameBudget: number;
+	/** Moda pinned patch: combine steady-state wavefront dispatches into one submission. */
+	batchDispatches: boolean;
 	maxTransparentBounces: number;
 	maxSamples: number;
 	transmissiveBackground: TransmissiveBackgroundMode;
@@ -182,6 +188,7 @@ export class WebGPUPathTracer {
 	pause: boolean;
 
 	readonly target: Texture | null;
+	readonly diffuseTarget: Texture | null;
 	readonly fadeState: number;
 	readonly lowResTarget: Texture;
 	readonly lowResMode: boolean;
@@ -204,7 +211,8 @@ export class WebGPUPathTracer {
 	updateLights(): void;
 
 	reset(): void;
-	renderSample(): void;
+	prepareAsync(): Promise<void>;
+	renderSample( options?: { present?: boolean } ): void;
 	renderDebugBounds( options?: DebugBoundsOptions ): void;
 	renderTextureAtlas( layer?: number ): void;
 	renderSampleDensity(): void;

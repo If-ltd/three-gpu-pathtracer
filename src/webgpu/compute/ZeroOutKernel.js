@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { StorageTexture } from 'three/webgpu';
 import { ComputeKernel } from './ComputeKernel.js';
 import { textureStore, globalId } from 'three/tsl';
@@ -12,7 +13,7 @@ export class ZeroOutKernel extends ComputeKernel {
 			outputTarget: textureStore( new StorageTexture( 1, 1 ) ).toWriteOnly(),
 		};
 
-		const fn = wgslTagFn/* wgsl */`
+		const fn = pipelineWgslTagFn(64)`
 			fn compute( globalId: vec3u ) -> void {
 
 				textureStore( ${ params.outputTarget }, globalId.xy, vec4( 0, 0, 0, 1 ) );

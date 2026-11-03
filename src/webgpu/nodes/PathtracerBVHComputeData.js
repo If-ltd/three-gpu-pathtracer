@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { BackSide, FrontSide, DoubleSide, BufferAttribute, BufferGeometry, StorageBufferAttribute, StructTypeNode, Vector4, SkinnedMesh, RepeatWrapping, ClampToEdgeWrapping, MirroredRepeatWrapping, NearestFilter } from 'three/webgpu';
 import { BVHComputeData, intersectRayTriangle, bvhNodeBoundsStruct, bvhNodeStruct, rayStruct, wgslTagFn } from 'three-mesh-bvh/webgpu';
 import { storage, float, bool, texture, uniformArray, uint } from 'three/tsl';
@@ -9,6 +10,11 @@ import { getSurfaceRecordFunc } from './material.wgsl.js';
 import { AtlasTexture } from '../AtlasTexture.js';
 
 const _colorVec = new Vector4();
+// Trace kernels only need positions and indices; keep them adjacent per triangle
+// instead of gathering three vertices from the full shading-attribute buffer.
+const traceTriangleStruct = new StructTypeNode( {
+	a: 'vec3f', i0: 'uint', b: 'vec3f', i1: 'uint', c: 'vec3f', i2: 'uint',
+}, 'TraceTriangle' );
 const transformStruct = new StructTypeNode( {
 	matrixWorld: 'mat4x4f',
 	inverseMatrixWorld: 'mat4x4f',
@@ -124,7 +130,7 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 
 		} );
 
-		fns.getUvFromChannel = wgslTagFn/* wgsl */`
+		fns.getUvFromChannel = pipelineWgslTagFn(104)`
 			fn getUvFromChannel( vertexData: ${ structs.attributes }, packed: i32 ) -> vec2f {
 
 				// the uv channel is packed into bits 23-25 of the "*Map" descriptor
@@ -153,7 +159,7 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 		const hasColor = Boolean( structs.attributes.membersLayout.find( ( { name } ) => name === 'color' ) );
 		if ( hasColor ) {
 
-			fns.getColor = wgslTagFn/* wgsl */`
+			fns.getColor = pipelineWgslTagFn(105)`
 				fn getColor( vertexData: ${ structs.attributes } ) -> vec4f {
 
 					return vertexData.color;
@@ -163,7 +169,7 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 
 		} else {
 
-			fns.getColor = wgslTagFn/* wgsl */`
+			fns.getColor = pipelineWgslTagFn(106)`
 				fn getColor( vertexData: ${ structs.attributes } ) -> vec4f {
 
 					return vec4f( 1.0 );
@@ -201,14 +207,14 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 			shapeStruct: rayStruct,
 			resultStruct: intersectionResultStruct,
 
-			boundsOrderFn: wgslTagFn/* wgsl */`
+			boundsOrderFn: pipelineWgslTagFn(107)`
 				fn getBoundsOrder( ray: ${ rayStruct }, splitAxis: u32, node: ${ bvhNodeStruct } ) -> bool {
 
 					return ray.direction[ splitAxis ] >= 0.0;
 
 				}
 			`,
-			intersectsBoundsFn: wgslTagFn/* wgsl */`
+			intersectsBoundsFn: pipelineWgslTagFn(108)`
 				fn rayIntersectsBounds( ray: ${ rayStruct }, bounds: ${ bvhNodeBoundsStruct }, result: ptr<function, ${ intersectionResultStruct }> ) -> u32 {
 
 					// early-out if our object is completely transparent
@@ -253,19 +259,19 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 				}
 
 			`,
-			intersectRangeFn: wgslTagFn/* wgsl */`
+			intersectRangeFn: pipelineWgslTagFn(109)`
 				fn intersectRange( ray: ${ rayStruct }, offset: u32, count: u32, result: ptr<function, ${ intersectionResultStruct }> ) -> bool {
 
 					var didHit = false;
 					for ( var ti = offset; ti < offset + count; ti = ti + 1u ) {
 
-						let i0 = ${ storage.index }[ ti * 3u ];
-						let i1 = ${ storage.index }[ ti * 3u + 1u ];
-						let i2 = ${ storage.index }[ ti * 3u + 2u ];
-
-						let a = ${ storage.attributes }[ i0 ].position.xyz;
-						let b = ${ storage.attributes }[ i1 ].position.xyz;
-						let c = ${ storage.attributes }[ i2 ].position.xyz;
+						let triangle = ${ storage.traceTriangles }[ ti ];
+						let i0 = triangle.i0;
+						let i1 = triangle.i1;
+						let i2 = triangle.i2;
+						let a = triangle.a;
+						let b = triangle.b;
+						let c = triangle.c;
 
 						var triResult = ${ intersectRayTriangle }( ray, a, b, c, 0.0 );
 						triResult.dist *= ${ scratchRayScalar };
@@ -362,6 +368,13 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 							result.indices = vec4u( i0, i1, i2, ti );
 
 							didHit = true;
+							// Alpha/visibility filtering has accepted an actual blocker.
+							// No nearest distance or forward-block flag is needed once occluded.
+							if ( ${ isShadowRay } ) {
+
+								return true;
+
+							}
 
 						}
 
@@ -371,7 +384,7 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 
 				}
 			`,
-			transformShapeFn: wgslTagFn/* wgsl */`
+			transformShapeFn: pipelineWgslTagFn(110)`
 				fn transformRay( ray: ptr<function, ${ rayStruct }>, objectIndex: u32 ) -> void {
 
 					let toLocal = ${ storage.transforms }[ objectIndex ].inverseMatrixWorld;
@@ -400,7 +413,7 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 
 				}
 			`,
-			transformResultFn: wgslTagFn/* wgsl */`
+			transformResultFn: pipelineWgslTagFn(111)`
 				fn transformResult( hit: ptr<function, ${ intersectionResultStruct }>, objectIndex: u32 ) -> void {
 
 					let toLocal = ${ storage.transforms }[ objectIndex ].inverseMatrixWorld;
@@ -409,7 +422,7 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 
 				}
 			`,
-			resetShapeFn: wgslTagFn/* wgsl */`
+			resetShapeFn: pipelineWgslTagFn(112)`
 				fn resetRayScalar( objectIndex: u32 ) -> void {
 
 					${ scratchRayScalar } = 1.0;
@@ -422,7 +435,7 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 		fns.raycastFirstHit = this.getShapecastFn( {
 			...raycastOptions,
 			name: 'raycastFirstHit',
-			prefixFn: wgslTagFn/* wgsl */`
+			prefixFn: pipelineWgslTagFn(113)`
 				fn initFirstHitCull() -> void {
 
 					${ isShadowRay } = false;
@@ -434,7 +447,8 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 		fns.raycastShadow = this.getShapecastFn( {
 			...raycastOptions,
 			name: 'raycastShadow',
-			prefixFn: wgslTagFn/* wgsl */`
+			terminateOnHit: true,
+			prefixFn: pipelineWgslTagFn(114)`
 				fn initShadowCull() -> void {
 
 					${ isShadowRay } = true;
@@ -457,6 +471,7 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 		this.updateMaterialsMap();
 
 		super.update();
+		this.updateTraceTriangles();
 
 		// build the channel -> uv lookup now that the geometry struct (and its uv members) exist
 		this.updateUvSampleFunction();
@@ -467,6 +482,31 @@ export class PathtracerBVHComputeData extends BVHComputeData {
 
 		this.bvhMap.clear();
 		this.useTransparencyRaycastFn();
+
+	}
+
+	updateTraceTriangles() {
+
+		const { storage: buffers, structs } = this;
+		const attributes = buffers.attributes.proxyNode.value.array;
+		const indices = buffers.index.proxyNode.value.array;
+		const positionMember = structs.attributes.membersLayout.findIndex( member => member.name === 'position' );
+		// Pathtracer attributes are all vec4, including any extra UV channels.
+		const stride = structs.attributes.getLength();
+		const positions = new Float32Array( attributes.buffer, attributes.byteOffset, attributes.length );
+		const count = Math.max( 2, indices.length / 3 );
+		const packed = new Float32Array( count * 12 );
+		const packedIndices = new Uint32Array( packed.buffer );
+		for ( let i = 0; i < indices.length; i ++ ) {
+
+			const offset = indices[ i ] * stride + positionMember * 4;
+			packed[ i * 4 ] = positions[ offset ];
+			packed[ i * 4 + 1 ] = positions[ offset + 1 ];
+			packed[ i * 4 + 2 ] = positions[ offset + 2 ];
+			packedIndices[ i * 4 + 3 ] = indices[ i ];
+
+		}
+		buffers.traceTriangles = storage( new StorageBufferAttribute( new Uint32Array( packed.buffer ), 1 ), traceTriangleStruct ).toReadOnly().setName( 'bvh_traceTriangles' );
 
 	}
 

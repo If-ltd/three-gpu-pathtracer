@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { Box3, DataTexture, LinearFilter, Vector2, Scene, PerspectiveCamera, Color, NoToneMapping, FloatType, Timer, StorageTexture, MeshBasicNodeMaterial, Matrix4, WebGPUCoordinateSystem } from 'three/webgpu';
 import { uv, uniform, varying } from 'three/tsl';
 import { SkinnedMeshBVH, MeshBVH, SAH } from 'three-mesh-bvh';
@@ -161,6 +162,18 @@ export class WebGPUPathTracer {
 	 * @type {number}
 	 * @default 250000
 	 */
+	get batchDispatches() {
+
+		return this._pathTracer.batchDispatches === true;
+
+	}
+
+	set batchDispatches( value ) {
+
+		this._pathTracer.batchDispatches = value;
+
+	}
+
 	get frameBudget() {
 
 		return this._pathTracer.frameBudget;
@@ -232,6 +245,7 @@ export class WebGPUPathTracer {
 		counts.min = measured.min;
 		counts.max = measured.max;
 		counts.avg = measured.avg;
+        if (measured.convergedMin !== undefined) Object.assign(counts, {convergedMin: measured.convergedMin, activePixels: measured.activePixels, adaptiveStage: measured.adaptiveStage});
 
 		// averaged over the whole render, and idle time counts against it
 		const elapsed = this.getRenderTime() / 1000;
@@ -365,6 +379,8 @@ export class WebGPUPathTracer {
 	 * @type {Texture|null}
 	 * @readonly
 	 */
+	get diffuseTarget() { return this._pathTracer.diffuseTarget ?? null; }
+
 	get target() {
 
 		return this._pathTracer.outputTarget ?? null;
@@ -427,7 +443,7 @@ export class WebGPUPathTracer {
 		const maxSamples = this._pathTracer.maxSamples;
 
 		this._pathTracer.dispose();
-		this._pathTracer = value ? new MegaKernelPathTracer( this._renderer ) : new WaveFrontPathTracer( this._renderer );
+		this._pathTracer = value ? new MegaKernelPathTracer( this._renderer ) : new WaveFrontPathTracer( this._renderer, this._waveFrontOptions );
 		this._pathTracer.maxSamples = maxSamples;
 		this._pathTracer.setBVHData( this._bvhData );
 		this._pathTracer.setMaterial( this.material );
@@ -449,7 +465,9 @@ export class WebGPUPathTracer {
 	/**
 	 * @param {WebGPURenderer} renderer
 	 */
-	constructor( renderer ) {
+	constructor( renderer, { sparseAccumulation = false, adaptiveSampling = false, pathStateLayout = 'aos', sortMaterialPaths = false, pruneZeroContribution = false, captureDiffuse = false, pipelineShaders } = {} ) {
+
+		this._waveFrontOptions = { sparseAccumulation, adaptiveSampling, pathStateLayout, sortMaterialPaths, pruneZeroContribution, captureDiffuse, pipelineShaders };
 
 		// members
 		this._renderer = renderer;
@@ -469,7 +487,7 @@ export class WebGPUPathTracer {
 		this._lowResTarget.type = FloatType;
 		this._lowResTarget.generateMipmaps = false;
 
-		this._pathTracer = new WaveFrontPathTracer( renderer );
+		this._pathTracer = new WaveFrontPathTracer( renderer, this._waveFrontOptions );
 
 		// optional post passes, attached with "setDenoiser" / "setUpscaler"
 		this._denoiser = null;
@@ -697,7 +715,7 @@ export class WebGPUPathTracer {
 		} );
 
 		// Build TLAS and compute functions
-		const bvhData = new PathtracerBVHComputeData( scene );
+		const bvhData = new PathtracerBVHComputeData( scene, { studioBvh: this._renderer.studioRenderPipeline?.bvh } );
 		bvhData.update();
 		bvhData.textureAtlas.setTextures( this._renderer, bvhData.textures );
 
@@ -793,7 +811,7 @@ export class WebGPUPathTracer {
 					return false;
 
 				},
-				fn: wgslTagFn/* wgsl */`
+				fn: pipelineWgslTagFn(55)`
 					fn getCameraRay( uv: vec2f, resolution: vec2f, ray: ptr<function, ${ rayStruct }> ) -> bool {
 
 						let ndc = uv * 2.0 - vec2f( 1.0 );
@@ -905,7 +923,9 @@ export class WebGPUPathTracer {
 
 		const { _pathTracer, scene } = this;
 
-		const lights = getLights( scene );
+		// Snapshot clones have fresh UUIDs. Keep scene traversal order so NEE
+		// light indices and seeded samples remain stable across render sessions.
+		const lights = getLights( scene, false );
 		_pathTracer.setLights( lights );
 		this.reset();
 
@@ -951,10 +971,28 @@ export class WebGPUPathTracer {
 
 	}
 
+	/** Precompile the current offline graph without accumulating or displaying samples. */
+	async prepareAsync() {
+
+		const pause = this.pause;
+		this.pause = true;
+		try {
+
+			this.renderSample( { present: false } );
+
+		} finally {
+
+			this.pause = pause;
+
+		}
+		if ( this._pathTracer.prepareAsync ) await this._pathTracer.prepareAsync();
+
+	}
+
 	/**
 	 * Accumulates one round of samples and presents the result to the canvas. Call once per frame.
 	 */
-	renderSample() {
+	renderSample( { present = true } = {} ) {
 
 		const renderer = this._renderer;
 		const size = this._size;
@@ -1084,13 +1122,21 @@ export class WebGPUPathTracer {
 		if ( denoiser && ! lowResMode ) {
 
 			// "min" so every pixel has stopped, not just the average
-			if ( awaitingDenoise && this._lastSampleCounts.min >= maxSamples ) {
+			if ( awaitingDenoise && (this._lastSampleCounts.convergedMin ?? this._lastSampleCounts.min) >= maxSamples ) {
 
 				denoiser.update( pathTracer.outputTarget );
 
 			}
 
 			texture = denoiser.texture ?? texture;
+
+		}
+
+		if ( ! present ) {
+
+			renderer.autoClear = originalAutoClear;
+			renderer.setRenderTarget( originalTarget );
+			return;
 
 		}
 

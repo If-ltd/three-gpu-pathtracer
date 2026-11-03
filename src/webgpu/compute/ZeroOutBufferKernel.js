@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { IndirectStorageBufferAttribute } from 'three/webgpu';
 import { ComputeKernel } from './ComputeKernel.js';
 import { storage, globalId } from 'three/tsl';
@@ -16,7 +17,7 @@ export class ZeroOutBufferKernel extends ComputeKernel {
 			outputTarget: storage( new IndirectStorageBufferAttribute( 1, 1 ), type ),
 		};
 
-		const fn = wgslTagFn/* wgsl */`
+		const fn = pipelineWgslTagFn(63)`
 			fn compute( globalId: vec3u ) -> void {
 
 				${ params.outputTarget }[ globalId.x ] = 0;

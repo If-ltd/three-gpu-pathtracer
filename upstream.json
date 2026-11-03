@@ -1,0 +1,24 @@
+{
+  "name": "three-gpu-pathtracer",
+  "version": "0.0.27",
+  "dist": {
+    "shasum": "3c02746c9bbf3dd2207052ff9bf31c130ea94a22",
+    "tarball": "https://registry.npmjs.org/three-gpu-pathtracer/-/three-gpu-pathtracer-0.0.27.tgz",
+    "fileCount": 154,
+    "integrity": "sha512-NLUYnL9nSLcUFurIHHLHbnmpKLaXi8JbGqfTeWRSx4h+l7Ndpllwj2DK2uOYTSUaN5+PuZ1JRqv1ynHEB1XCwQ==",
+    "signatures": [
+      {
+        "sig": "MEUCIHKA7ttHhNyw2pHYrimeFG3Oj3ZqLhTmHxIWBSoNgy8GAiEA3DZ78n0SktYD6qJ3rw5NwXGhbuMF61aodT7QLug5Gug=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      },
+      {
+        "sig": "MEUCIAk8gwNSxclt2U1I8WqSa1Qq9zpXmADC/GveFOG0WopxAiEA+lyTyl+IWm9/ZMtjGM0mUOFWpqDuah/gyXVWWK84U0Y=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "unpackedSize": 2003573
+  },
+  "gitHead": "afc7db6294c15185752b22abc553d17168aaae9b",
+  "license": "MIT",
+  "source": "https://github.com/gkjohnson/three-gpu-pathtracer"
+}

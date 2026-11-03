@@ -30,6 +30,10 @@ class DependentStructTypeNode extends StructTypeNode {
 // the previous frame's trace results and stage the next bounce.
 export const rayDataStruct = new StructTypeNode( {
 
+	diffuseThroughput: 'vec3f',
+	diffuseResult: 'vec3f',
+	diffuseScatter: 'vec3f',
+	diffuseLight: 'vec3f',
 	throughputColor: 'vec3f',
 	currentBounce: 'uint',
 

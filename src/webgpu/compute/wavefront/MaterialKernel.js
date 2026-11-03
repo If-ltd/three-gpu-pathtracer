@@ -1,3 +1,7 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
+import { bindPipelineShader } from './pipeline-shader.js';
+import { createHasContributionFn } from './zero-contribution.js';
+import { createPathStateAccessors } from './path-state.js';
 import { Vector2 } from 'three';
 import { StorageBufferAttribute, StorageTexture } from 'three/webgpu';
 import { ComputeKernel } from '../ComputeKernel.js';
@@ -8,6 +12,7 @@ import { rayDataStruct, rayQueueAtomicStruct, pixelQueueStruct } from './structs
 import { SAMPLE_ACTIVE_FLAG, SAMPLE_COUNT_MASK, SAMPLE_DISPATCHED_FLAG } from '../../constants.js';
 import { applyDispersionFunc, dispersionColorWeightFunc, DISPERSION_MIN_WAVELENGTH, DISPERSION_MAX_WAVELENGTH, transmissionAttenuationFunc } from '../../nodes/material.wgsl.js';
 import { isTerminatingScatterFunc, offsetRayOriginFunc } from '../../nodes/utils.wgsl.js';
+import { surfaceRecordStruct } from '../../nodes/structs.wgsl.js';
 import { LIGHT_EPSILON } from '../../nodes/lights.wgsl.js';
 
 // Pure material evaluation and ray generation: terminated slots pull a recycled pixel and emit a
@@ -15,12 +20,14 @@ import { LIGHT_EPSILON } from '../../nodes/lights.wgsl.js';
 // enqueue the next bounce ray plus the NEE shadow ray toward the light LogicKernel selected.
 export class MaterialKernel extends ComputeKernel {
 
-	constructor( ) {
+	constructor(adaptiveSampling = false, soa = false, sortMaterialPaths = false, pruneZeroContribution = false, shaderList, captureDiffuse = false) {
 
 		const params = {
+            workQueue: storage(new StorageBufferAttribute(new Uint32Array(1), 1), 'uint'),
 			bvhData: { value: null },
 			material: { value: null },
 
+			risk: storage( new StorageBufferAttribute( new Uint32Array( 1 ), 1 ), 'uint' ),
 			seed: uniform( 0, 'uint' ),
 			targetDimensions: uniform( new Vector2() ),
 			maxSamples: uniform( 0, 'uint' ),
@@ -31,7 +38,7 @@ export class MaterialKernel extends ComputeKernel {
 
 			sampleCountTarget: textureStore( new StorageTexture( 1, 1 ) ).toReadWrite(),
 
-			rayDataStorage: storage( new StorageBufferAttribute( 1, 1 ), rayDataStruct ),
+			rayDataStorage: storage( new StorageBufferAttribute( 1, 1 ), soa ? 'uint' : rayDataStruct ),
 			rayQueue: storage( new StorageBufferAttribute( 1, 1 ), rayQueueAtomicStruct ),
 			shadowRayQueue: storage( new StorageBufferAttribute( 1, 1 ), rayQueueAtomicStruct ),
 			pixelQueue: storage( new StorageBufferAttribute( 1, 1 ), pixelQueueStruct ),
@@ -45,7 +52,34 @@ export class MaterialKernel extends ComputeKernel {
 		const bsdfSampleFn = proxyFn( 'material.value.bsdfSample', params );
 		const bsdfEvalPdfFn = proxyFn( 'material.value.bsdfEvalPdf', params );
 
-		const fn = wgslTagFn/* wgsl */`
+		const recordRisk = adaptiveSampling ? (shaderList === undefined ? pipelineWgslTagFn(74)`
+            fn recordRisk(indexUV: vec2u, width: u32, risk: u32) -> void {
+                let index = indexUV.y * width + indexUV.x;
+                ${params.risk}[index] = max(${params.risk}[index], risk);
+            }
+        ` : bindPipelineShader(shaderList.recordRisk, { risk: params.risk })) : (shaderList === undefined ? pipelineWgslTagFn(75)`fn recordRisk(indexUV: vec2u, width: u32, risk: u32) -> void {}` : bindPipelineShader(shaderList.skipRisk, {  }));
+
+        const path = createPathStateAccessors(params.rayDataStorage, soa);
+		const workIndex = sortMaterialPaths ? (shaderList === undefined ? pipelineWgslTagFn(76)`
+            fn materialWorkIndex(workIndex: u32) -> u32 {
+                let queue = &${params.workQueue};
+                let capacity = (arrayLength(queue) - 4u) / 4u;
+                var offset = workIndex;
+                for (var group = 0u; group < 4u; group++) {
+                    if (offset < queue[group]) { return queue[4u + group * capacity + offset]; }
+                    offset -= queue[group];
+                }
+                return workIndex;
+            }
+        ` : bindPipelineShader(shaderList.materialWorkIndex, { workQueue: params.workQueue })) : (shaderList === undefined ? pipelineWgslTagFn(77)`fn materialWorkIndex(workIndex: u32) -> u32 { return workIndex; }` : bindPipelineShader(shaderList.directMaterialWorkIndex, {  }));
+        const hasContribution = createHasContributionFn(pruneZeroContribution);
+        const diffuseCoefficient = captureDiffuse ? wgslTagFn`
+            fn diffuseCoefficient(coefficient: vec3f, surface: ${surfaceRecordStruct}, bounce: u32) -> vec3f {
+                if (bounce != 0u || surface.metalness > 0.0 || surface.transmission > 0.0 || surface.opacity < 1.0) { return vec3f(0.0); }
+                return coefficient;
+            }
+        ` : wgslTagFn`fn diffuseCoefficient(coefficient: vec3f, surface: ${surfaceRecordStruct}, bounce: u32) -> vec3f { return vec3f(0.0); }`;
+        const fn = (shaderList === undefined ? pipelineWgslTagFn(78)`
 
 			fn compute(
 				seed: u32,
@@ -59,7 +93,7 @@ export class MaterialKernel extends ComputeKernel {
 				globalId: vec3u
 			) -> void {
 
-				let rayDataStorage = &${ params.rayDataStorage };
+
 				let rayQueue = &${ params.rayQueue };
 				let shadowRayQueue = &${ params.shadowRayQueue };
 				let pixelQueue = &${ params.pixelQueue };
@@ -69,14 +103,15 @@ export class MaterialKernel extends ComputeKernel {
 
 				// bound by "rayCount" rather than the pool length. The dispatch rounds up to the
 				// workgroup size and those extra slots hold a zeroed pixel index
-				let index = globalId.x;
-				if ( index >= rayCount ) {
+				let workItem = globalId.x;
+				if ( workItem >= rayCount ) {
 
 					return;
 
 				}
 
-				let input = ( *rayDataStorage )[ index ];
+				let index = ${ workIndex }(workItem);
+                let input = ${ path.load }(index);
 				if ( input.objectIndex < 0 ) {
 
 					// the slot's path has terminated: recycle the pixel through the overflow queue and
@@ -102,9 +137,9 @@ export class MaterialKernel extends ComputeKernel {
 
 					if ( isComplete ) {
 
-						rayDataStorage[ index ].pixelIndex = pixelIndex;
-						rayDataStorage[ index ].rayIntersectionIndex = - 1;
-						rayDataStorage[ index ].shadowRayIntersectionIndex = - 1;
+						${ path.write.pixelIndex }(index, pixelIndex);
+						${ path.write.rayIntersectionIndex }(index, - 1);
+						${ path.write.shadowRayIntersectionIndex }(index, - 1);
 						return;
 
 					}
@@ -119,9 +154,9 @@ export class MaterialKernel extends ComputeKernel {
 						// the camera declined the pixel, so leave the slot dormant for this round
 						// TODO: same as above - this work is a bit wasteful and leaves slots empty for
 						// a frame. Is it possible to quickly skip rays outside the mask or are finished?
-						rayDataStorage[ index ].pixelIndex = pixelIndex;
-						rayDataStorage[ index ].rayIntersectionIndex = - 1;
-						rayDataStorage[ index ].shadowRayIntersectionIndex = - 1;
+						${ path.write.pixelIndex }(index, pixelIndex);
+						${ path.write.rayIntersectionIndex }(index, - 1);
+						${ path.write.shadowRayIntersectionIndex }(index, - 1);
 						return;
 
 					}
@@ -137,24 +172,28 @@ export class MaterialKernel extends ComputeKernel {
 					rayQueue.elements[ rayIndex ].alphaDepth = 0u;
 					rayQueue.elements[ rayIndex ].maxDist = ray.maxDist;
 
-					rayDataStorage[ index ].origin = ray.origin;
-					rayDataStorage[ index ].direction = ray.direction;
-					rayDataStorage[ index ].pixelIndex = pixelIndex;
-					rayDataStorage[ index ].seed = seed + samples;
-					rayDataStorage[ index ].currentBounce = 0u;
-					rayDataStorage[ index ].throughputColor = vec3f( 1.0 );
-					rayDataStorage[ index ].resultColor = vec4f( 0.0, 0.0, 0.0, 1.0 );
-					rayDataStorage[ index ].scatterColor = vec3f( 1.0 );
-					rayDataStorage[ index ].scatterPdf = 1.0;
-					rayDataStorage[ index ].minPdf = 1.0;
-					rayDataStorage[ index ].isFullyTransmissive = 1u;
-					rayDataStorage[ index ].emission = vec3f( 0.0 );
-					rayDataStorage[ index ].lightPdf = 0.0;
-					rayDataStorage[ index ].alphaDepth = 0u;
-					rayDataStorage[ index ].maxDist = ray.maxDist;
-					rayDataStorage[ index ].rayIntersectionIndex = i32( rayIndex );
-					rayDataStorage[ index ].shadowRayIntersectionIndex = - 1;
-					rayDataStorage[ index ].dispersionWavelength = - mix( ${ DISPERSION_MIN_WAVELENGTH }.0, ${ DISPERSION_MAX_WAVELENGTH }.0, ${ rand1 }( ${ RNG_INDEX_DISPERSION_WAVELENGTH } ) );
+					${ path.write.origin }(index, ray.origin);
+					${ path.write.direction }(index, ray.direction);
+					${ path.write.pixelIndex }(index, pixelIndex);
+					${ path.write.seed }(index, seed + samples);
+					${ path.write.currentBounce }(index, 0u);
+					${ path.write.throughputColor }(index, vec3f( 1.0 ));
+                    ${ path.write.diffuseThroughput }(index, vec3f(0.0));
+                    ${ path.write.diffuseResult }(index, vec3f(0.0));
+                    ${ path.write.diffuseScatter }(index, vec3f(0.0));
+                    ${ path.write.diffuseLight }(index, vec3f(0.0));
+					${ path.write.resultColor }(index, vec4f( 0.0, 0.0, 0.0, 1.0 ));
+					${ path.write.scatterColor }(index, vec3f( 1.0 ));
+					${ path.write.scatterPdf }(index, 1.0);
+					${ path.write.minPdf }(index, 1.0);
+					${ path.write.isFullyTransmissive }(index, 1u);
+					${ path.write.emission }(index, vec3f( 0.0 ));
+					${ path.write.lightPdf }(index, 0.0);
+					${ path.write.alphaDepth }(index, 0u);
+					${ path.write.maxDist }(index, ray.maxDist);
+					${ path.write.rayIntersectionIndex }(index, i32( rayIndex ));
+					${ path.write.shadowRayIntersectionIndex }(index, - 1);
+					${ path.write.dispersionWavelength }(index, - mix( ${ DISPERSION_MIN_WAVELENGTH }.0, ${ DISPERSION_MAX_WAVELENGTH }.0, ${ rand1 }( ${ RNG_INDEX_DISPERSION_WAVELENGTH } ) ));
 
 					// write the active params & dispatched flag
 					textureStore( ${ params.sampleCountTarget }, indexUV, vec4( ${ SAMPLE_ACTIVE_FLAG }u | ${ SAMPLE_DISPATCHED_FLAG }u | samples ) );
@@ -172,11 +211,11 @@ export class MaterialKernel extends ComputeKernel {
 					let isMatte = materialInfo.matte != 0 && input.currentBounce == 0u;
 					if ( isMatte ) {
 
-						rayDataStorage[ index ].resultColor = vec4f( 0.0 );
-						rayDataStorage[ index ].throughputColor = vec3f( 0.0 );
-						rayDataStorage[ index ].emission = vec3f( 0.0 );
-						rayDataStorage[ index ].lightPdf = 0.0;
-						rayDataStorage[ index ].shadowRayIntersectionIndex = - 1;
+						${ path.write.resultColor }(index, vec4f( 0.0 ));
+						${ path.write.throughputColor }(index, vec3f( 0.0 ));
+						${ path.write.emission }(index, vec3f( 0.0 ));
+						${ path.write.lightPdf }(index, 0.0);
+						${ path.write.shadowRayIntersectionIndex }(index, - 1);
 						return;
 
 					}
@@ -198,6 +237,13 @@ export class MaterialKernel extends ComputeKernel {
 
 					var surface = ${ getSurfaceRecordFn }( materialInfo, vertexData, input.side, input.normal, view, blurRoughness );
 
+                    if (input.currentBounce == 0u) {
+                        // Evaluate maps too. Names, part IDs and model identity play no role.
+                        let reflective = surface.metalness > 0.05 || surface.roughness < 0.4 || surface.clearcoat > 0.05;
+                        let risk = select(select(0u, 1u, reflective), 2u, surface.transmission > 0.01);
+                        ${ recordRisk }(indexUV, targetDimensions.x, risk);
+                    }
+
 					// Stochastically pass through partially transparent surfaces by re-enqueueing
 					// the ray at the hit point, advancing the alpha depth but not the bounce count.
 					let passesThrough = ${ rand1 }( ${ RNG_INDEX_ALPHA_TEST } ) > surface.opacity;
@@ -207,10 +253,10 @@ export class MaterialKernel extends ComputeKernel {
 						// should be invisible. A zeroed throughput terminates in LogicKernel.
 						if ( input.alphaDepth >= maxTransparentBounces ) {
 
-							rayDataStorage[ index ].throughputColor = vec3f( 0.0 );
-							rayDataStorage[ index ].emission = vec3f( 0.0 );
-							rayDataStorage[ index ].lightPdf = 0.0;
-							rayDataStorage[ index ].shadowRayIntersectionIndex = - 1;
+							${ path.write.throughputColor }(index, vec3f( 0.0 ));
+							${ path.write.emission }(index, vec3f( 0.0 ));
+							${ path.write.lightPdf }(index, 0.0);
+							${ path.write.shadowRayIntersectionIndex }(index, - 1);
 							return;
 
 						}
@@ -229,13 +275,13 @@ export class MaterialKernel extends ComputeKernel {
 						// the surface is skipped, so no scatter or emission is staged for LogicKernel.
 						// "pdf" is left alone so the previous scatter still weights the forward MIS,
 						// and "bsdf" matches it so applying the scatter leaves the throughput as is.
-						rayDataStorage[ index ].alphaDepth = input.alphaDepth + 1u;
-						rayDataStorage[ index ].emission = vec3f( 0.0 );
-						rayDataStorage[ index ].scatterColor = vec3f( input.scatterPdf );
-						rayDataStorage[ index ].lightPdf = 0.0;
-						rayDataStorage[ index ].origin = rayQueue.elements[ alphaIndex ].origin;
-						rayDataStorage[ index ].rayIntersectionIndex = i32( alphaIndex );
-						rayDataStorage[ index ].shadowRayIntersectionIndex = - 1;
+						${ path.write.alphaDepth }(index, input.alphaDepth + 1u);
+						${ path.write.emission }(index, vec3f( 0.0 ));
+						${ path.write.scatterColor }(index, vec3f( input.scatterPdf ));
+						${ path.write.lightPdf }(index, 0.0);
+						${ path.write.origin }(index, rayQueue.elements[ alphaIndex ].origin);
+						${ path.write.rayIntersectionIndex }(index, i32( alphaIndex ));
+						${ path.write.shadowRayIntersectionIndex }(index, - 1);
 						return;
 
 					}
@@ -250,9 +296,10 @@ export class MaterialKernel extends ComputeKernel {
 						${ applyDispersionFunc }( &surface, materialInfo.dispersion, wavelength );
 						if ( input.dispersionWavelength < 0.0 ) {
 
-							rayDataStorage[ index ].dispersionWavelength = wavelength;
+							${ path.write.dispersionWavelength }(index, wavelength);
 							throughputColor *= ${ dispersionColorWeightFunc }( wavelength );
-							rayDataStorage[ index ].throughputColor = throughputColor;
+							${ path.write.throughputColor }(index, throughputColor);
+                        ${ path.write.diffuseThroughput }(index, input.diffuseThroughput * ${ dispersionColorWeightFunc }(wavelength));
 
 						}
 
@@ -263,13 +310,16 @@ export class MaterialKernel extends ComputeKernel {
 					if ( input.side < 0.0 && materialInfo.transmission > 0.0 ) {
 
 						throughputColor *= ${ transmissionAttenuationFunc }( input.dist, materialInfo.attenuationColor, materialInfo.attenuationDistance );
-						rayDataStorage[ index ].throughputColor = throughputColor;
+						${ path.write.throughputColor }(index, throughputColor);
+                        ${ path.write.diffuseThroughput }(index, input.diffuseThroughput * ${ transmissionAttenuationFunc }(input.dist, materialInfo.attenuationColor, materialInfo.attenuationDistance));
 
 					}
 
 					// sample the next bounce direction and stage the scatter state for LogicKernel
 					var scatterRec = ${ bsdfSampleFn }( view, surface );
 					let newBounce = input.currentBounce + 1u;
+                    ${ path.write.diffuseScatter }(index, ${ diffuseCoefficient }(scatterRec.diffuseCoefficient, surface, input.currentBounce));
+                    ${ path.write.diffuseLight }(index, vec3f(0.0));
 
 					// decide termination now so finished paths skip the bounce trace entirely - a
 					// zeroed pdf reads as a terminating scatter in LogicKernel, which still resolves
@@ -295,12 +345,12 @@ export class MaterialKernel extends ComputeKernel {
 
 					// Write the ray storage content here since things like the emissive value is read
 					// in the logic kernel on the subsequent frame.
-					rayDataStorage[ index ].scatterColor = scatterRec.color;
-					rayDataStorage[ index ].scatterPdf = select( scatterRec.pdf, 0.0, isTerminated );
-					rayDataStorage[ index ].minPdf = min( input.minPdf, scatterRec.pdf );
-					rayDataStorage[ index ].isFullyTransmissive = input.isFullyTransmissive & select( 0u, 1u, scatterRec.isTransmissive );
-					rayDataStorage[ index ].emission = surface.emission;
-					rayDataStorage[ index ].currentBounce = newBounce;
+					${ path.write.scatterColor }(index, scatterRec.color);
+					${ path.write.scatterPdf }(index, select( scatterRec.pdf, 0.0, isTerminated ));
+					${ path.write.minPdf }(index, min( input.minPdf, scatterRec.pdf ));
+					${ path.write.isFullyTransmissive }(index, input.isFullyTransmissive & select( 0u, 1u, scatterRec.isTransmissive ));
+					${ path.write.emission }(index, surface.emission);
+					${ path.write.currentBounce }(index, newBounce);
 
 					// the NEE shadow ray below still resolves the surface's direct light, so only
 					// the bounce segment is skipped for finished paths
@@ -314,23 +364,27 @@ export class MaterialKernel extends ComputeKernel {
 						rayQueue.elements[ rayIndex ].seed = input.seed;
 						rayQueue.elements[ rayIndex ].alphaDepth = input.alphaDepth;
 						rayQueue.elements[ rayIndex ].maxDist = 0.0;
-						rayDataStorage[ index ].rayIntersectionIndex = i32( rayIndex );
+						${ path.write.rayIntersectionIndex }(index, i32( rayIndex ));
 
-						rayDataStorage[ index ].origin = rayQueue.elements[ rayIndex ].origin;
-						rayDataStorage[ index ].direction = scatterRec.direction;
+						${ path.write.origin }(index, rayQueue.elements[ rayIndex ].origin);
+						${ path.write.direction }(index, scatterRec.direction);
 
 					}
 
 					// evaluate the bsdf toward the light LogicKernel selected and enqueue the shadow ray.
 					// the light pdf will be 0 if NEE is disabled.
 					var lightPdf = input.lightPdf;
+                    if (!${ hasContribution }(throughputColor, input.lightEmission, vec3f(1.0))) {
+                        lightPdf = 0.0;
+                    }
 					if ( lightPdf > 0.0 ) {
 
 						let evalRec = ${ bsdfEvalPdfFn }( view, input.lightDirection, surface );
-						if ( evalRec.pdf > 0.0 ) {
+						if ( evalRec.pdf > 0.0 && ${ hasContribution }(throughputColor, input.lightEmission, evalRec.color) ) {
 
-							rayDataStorage[ index ].lightBsdf = evalRec.color;
-							rayDataStorage[ index ].lightBsdfPdf = evalRec.pdf;
+							${ path.write.lightBsdf }(index, evalRec.color);
+                            ${ path.write.diffuseLight }(index, ${ diffuseCoefficient }(evalRec.diffuseCoefficient, surface, input.currentBounce));
+							${ path.write.lightBsdfPdf }(index, evalRec.pdf);
 
 							let shadowIndex = atomicAdd( &shadowRayQueue.length, 1u );
 							shadowRayQueue.elements[ shadowIndex ].origin = ${ offsetRayOriginFunc }( vertexData.position.xyz, input.lightDirection, input.normal );
@@ -340,7 +394,7 @@ export class MaterialKernel extends ComputeKernel {
 							shadowRayQueue.elements[ shadowIndex ].seed = input.seed;
 							shadowRayQueue.elements[ shadowIndex ].alphaDepth = input.alphaDepth;
 							shadowRayQueue.elements[ shadowIndex ].maxDist = input.lightDist * ( 1.0 - ${ LIGHT_EPSILON } );
-							rayDataStorage[ index ].shadowRayIntersectionIndex = i32( shadowIndex );
+							${ path.write.shadowRayIntersectionIndex }(index, i32( shadowIndex ));
 
 						} else {
 
@@ -352,15 +406,15 @@ export class MaterialKernel extends ComputeKernel {
 
 					if ( lightPdf <= 0.0 ) {
 
-						rayDataStorage[ index ].lightPdf = 0.0;
-						rayDataStorage[ index ].shadowRayIntersectionIndex = - 1;
+						${ path.write.lightPdf }(index, 0.0);
+						${ path.write.shadowRayIntersectionIndex }(index, - 1);
 
 					}
 
 				}
 
 			}
-		`;
+` : bindPipelineShader(shaderList.materialScatter, { diffuseCoefficient, writeDiffuseThroughput: path.write.diffuseThroughput, writeDiffuseResult: path.write.diffuseResult, writeDiffuseScatter: path.write.diffuseScatter, writeDiffuseLight: path.write.diffuseLight, rayQueue: params.rayQueue, shadowRayQueue: params.shadowRayQueue, pixelQueue: params.pixelQueue, materials: proxy( 'bvhData.value.storage.materials', params ), transforms: proxy( 'bvhData.value.storage.transforms', params ), workIndex: workIndex, load: path.load, sampleCountTarget: params.sampleCountTarget, sampleCountMask: SAMPLE_COUNT_MASK, writePixelIndex: path.write.pixelIndex, writeRayIntersectionIndex: path.write.rayIntersectionIndex, writeShadowRayIntersectionIndex: path.write.shadowRayIntersectionIndex, rngInit: rngInit, rand2: rand2, rngIndexRayJitter: RNG_INDEX_RAY_JITTER, rayStruct: rayStruct, getCameraRayFn: getCameraRayFn, writeOrigin: path.write.origin, writeDirection: path.write.direction, writeSeed: path.write.seed, writeCurrentBounce: path.write.currentBounce, writeThroughputColor: path.write.throughputColor, writeResultColor: path.write.resultColor, writeScatterColor: path.write.scatterColor, writeScatterPdf: path.write.scatterPdf, writeMinPdf: path.write.minPdf, writeIsFullyTransmissive: path.write.isFullyTransmissive, writeEmission: path.write.emission, writeLightPdf: path.write.lightPdf, writeAlphaDepth: path.write.alphaDepth, writeMaxDist: path.write.maxDist, writeDispersionWavelength: path.write.dispersionWavelength, dispersionMinWavelength: DISPERSION_MIN_WAVELENGTH, dispersionMaxWavelength: DISPERSION_MAX_WAVELENGTH, rand1: rand1, rngIndexDispersionWavelength: RNG_INDEX_DISPERSION_WAVELENGTH, sampleActiveFlag: SAMPLE_ACTIVE_FLAG, sampleDispatchedFlag: SAMPLE_DISPATCHED_FLAG, sampleTrianglePointFn: sampleTrianglePointFn, getSurfaceRecordFn: getSurfaceRecordFn, recordRisk: recordRisk, rngIndexAlphaTest: RNG_INDEX_ALPHA_TEST, offsetRayOriginFunc: offsetRayOriginFunc, applyDispersionFunc: applyDispersionFunc, dispersionColorWeightFunc: dispersionColorWeightFunc, transmissionAttenuationFunc: transmissionAttenuationFunc, bsdfSampleFn: bsdfSampleFn, isTerminatingScatterFunc: isTerminatingScatterFunc, rngIndexRussianRoulette: RNG_INDEX_RUSSIAN_ROULETTE, hasContribution: hasContribution, bsdfEvalPdfFn: bsdfEvalPdfFn, writeLightBsdf: path.write.lightBsdf, writeLightBsdfPdf: path.write.lightBsdfPdf, lightEpsilon: LIGHT_EPSILON }));
 
 		super( fn( params ) );
 

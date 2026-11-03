@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { wgslTagFn } from 'three-mesh-bvh/webgpu';
 import { rand2, RNG_INDEX_SCATTER_DIRECTION } from '../nodes/random.wgsl.js';
 import { diffuseDirectionFunc } from '../nodes/sampling.wgsl.js';
@@ -25,7 +26,7 @@ export class PathtracingMaterial {
 	 */
 	getBsdfNode() {
 
-		return wgslTagFn/* wgsl */`
+		return pipelineWgslTagFn(98)`
 
 			fn bsdfSample( worldWo: vec3f, surf: SurfaceRecord ) -> ScatterRecord {
 
@@ -55,7 +56,7 @@ export class PathtracingMaterial {
 	 */
 	getBsdfEvalPdfNode() {
 
-		return wgslTagFn/* wgsl */`
+		return pipelineWgslTagFn(99)`
 
 			fn bsdfEvalPdf( worldWo: vec3f, worldWi: vec3f, surf: SurfaceRecord ) -> ScatterRecord {
 

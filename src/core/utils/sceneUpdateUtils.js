@@ -69,7 +69,7 @@ export function getTextures( materials ) {
 
 }
 
-export function getLights( scene ) {
+export function getLights( scene, sortByUuid = true ) {
 
 	const lights = [];
 	scene.traverseVisible( c => {
@@ -88,6 +88,6 @@ export function getLights( scene ) {
 
 	} );
 
-	return lights.sort( uuidSort );
+	return sortByUuid ? lights.sort( uuidSort ) : lights;
 
 }

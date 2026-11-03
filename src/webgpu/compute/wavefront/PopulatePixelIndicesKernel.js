@@ -1,3 +1,6 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
+import { bindPipelineShader } from './pipeline-shader.js';
+import { createPathStateAccessors } from './path-state.js';
 import { Vector2 } from 'three';
 import { StorageBufferAttribute } from 'three/webgpu';
 import { uniform, storage, globalId } from 'three/tsl';
@@ -11,20 +14,29 @@ import { rayDataStruct, pixelQueueNonAtomicStruct } from './structs.js';
 // resizing the pool in the render loop, with ResetSlotsKernel returning retired slots' pixels.
 export class PopulatePixelIndicesKernel extends ComputeKernel {
 
-	constructor( ) {
+	constructor(adaptiveSampling = false, soa = false, shaderList) {
 
 		const params = {
-			rayDataStorage: storage( new StorageBufferAttribute( 1, 1 ), rayDataStruct ),
+			rayDataStorage: storage( new StorageBufferAttribute( 1, 1 ), soa ? 'uint' : rayDataStruct ),
 			pixelQueue: storage( new StorageBufferAttribute( 1, 1 ), pixelQueueNonAtomicStruct ),
 			targetDimensions: uniform( new Vector2() ),
 			frameBudget: uniform( 0, 'uint' ),
+			risk: storage( new StorageBufferAttribute( new Uint32Array( 1 ), 1 ), 'uint' ),
+			targets: storage( new StorageBufferAttribute( new Uint32Array( 1 ), 1 ), 'uint' ),
+			finalSamples: uniform( 0, 'uint' ),
 			globalId: globalId,
 		};
 
-		const fn = wgslTagFn/* wgsl */`
-			fn compute( targetDimensions: vec2u, frameBudget: u32, globalId: vec3u ) -> void {
+        const initializeAdaptive = adaptiveSampling ? (shaderList === undefined ? pipelineWgslTagFn(80)`
+            fn initializeAdaptive(index: u32, samples: u32) -> void {
+                ${params.risk}[index] = 0u; ${params.targets}[index] = samples;
+            }
+        ` : bindPipelineShader(shaderList.initializeAdaptiveTargets, { risk: params.risk, targets: params.targets })) : (shaderList === undefined ? pipelineWgslTagFn(81)`fn initializeAdaptive(index: u32, samples: u32) -> void {}` : bindPipelineShader(shaderList.skipAdaptiveTargets, {  }));
+        const path = createPathStateAccessors(params.rayDataStorage, soa);
+		const fn = (shaderList === undefined ? pipelineWgslTagFn(82)`
+			fn compute( targetDimensions: vec2u, frameBudget: u32, finalSamples: u32, globalId: vec3u ) -> void {
 
-				let rayDataStorage = &${ params.rayDataStorage };
+				
 				let pixelQueue = &${ params.pixelQueue };
 
 				if ( globalId.x >= targetDimensions.x || globalId.y >= targetDimensions.y ) {
@@ -33,7 +45,7 @@ export class PopulatePixelIndicesKernel extends ComputeKernel {
 
 				}
 
-				let rayCount = min( frameBudget, arrayLength( rayDataStorage ) );
+				let rayCount = min( frameBudget, ${path.capacity}() );
 				let pixelCount = targetDimensions.x * targetDimensions.y;
 				if ( globalId.x == 0u && globalId.y == 0u ) {
 
@@ -44,15 +56,16 @@ export class PopulatePixelIndicesKernel extends ComputeKernel {
 
 				let pixelHash = ( globalId.x << 16 ) | globalId.y;
 				let pixelIndex = globalId.x + globalId.y * targetDimensions.x;
+                ${initializeAdaptive}(pixelIndex, finalSamples);
 				if ( pixelIndex < rayCount ) {
 
-					rayDataStorage[ pixelIndex ].pixelIndex = pixelHash;
-					rayDataStorage[ pixelIndex ].resultColor = vec4f( 0.0 );
-					rayDataStorage[ pixelIndex ].throughputColor = vec3f( 0.0 );
-					rayDataStorage[ pixelIndex ].objectIndex = - 1;
-					rayDataStorage[ pixelIndex ].alphaDepth = 0u;
-					rayDataStorage[ pixelIndex ].rayIntersectionIndex = - 1;
-					rayDataStorage[ pixelIndex ].shadowRayIntersectionIndex = - 1;
+					${path.write.pixelIndex}(pixelIndex, pixelHash);
+					${path.write.resultColor}(pixelIndex, vec4f( 0.0 ));
+					${path.write.throughputColor}(pixelIndex, vec3f( 0.0 ));
+					${path.write.objectIndex}(pixelIndex, - 1);
+					${path.write.alphaDepth}(pixelIndex, 0u);
+					${path.write.rayIntersectionIndex}(pixelIndex, - 1);
+					${path.write.shadowRayIntersectionIndex}(pixelIndex, - 1);
 
 				} else {
 
@@ -61,7 +74,7 @@ export class PopulatePixelIndicesKernel extends ComputeKernel {
 				}
 
 			}
-		`;
+		` : bindPipelineShader(shaderList.populatePixels, { pixelQueue: params.pixelQueue, capacity: path.capacity, initializeAdaptive: initializeAdaptive, writePixelIndex: path.write.pixelIndex, writeResultColor: path.write.resultColor, writeThroughputColor: path.write.throughputColor, writeObjectIndex: path.write.objectIndex, writeAlphaDepth: path.write.alphaDepth, writeRayIntersectionIndex: path.write.rayIntersectionIndex, writeShadowRayIntersectionIndex: path.write.shadowRayIntersectionIndex }));
 
 		super( fn( params ) );
 

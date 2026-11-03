@@ -1,5 +1,6 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { StorageBufferAttribute, StorageTexture, StructTypeNode } from 'three/webgpu';
-import { storage, textureStore, globalId } from 'three/tsl';
+import { storage, textureStore, uniform, globalId } from 'three/tsl';
 import { wgslTagFn } from 'three-mesh-bvh/webgpu';
 import { ComputeKernel } from './ComputeKernel.js';
 import { SAMPLE_COUNT_MASK, SAMPLE_DISPATCHED_FLAG } from '../constants.js';
@@ -10,7 +11,8 @@ export const SAMPLE_COUNTER_MAX = 1;
 export const SAMPLE_COUNTER_TOTAL_LO = 2;
 export const SAMPLE_COUNTER_TOTAL_HI = 3;
 export const SAMPLE_COUNTER_PIXEL_COUNT = 4;
-export const SAMPLE_COUNTER_LENGTH = 5;
+export const SAMPLE_COUNTER_CONVERGED_MIN = 5;
+export const SAMPLE_COUNTER_LENGTH = 6;
 
 export const U32_RANGE = 4294967296;
 
@@ -22,6 +24,7 @@ export const sampleCountersStruct = new StructTypeNode( {
 	totalLo: { type: 'uint', atomic: true },
 	totalHi: { type: 'uint', atomic: true },
 	pixelCount: { type: 'uint', atomic: true },
+	convergedMin: { type: 'uint', atomic: true },
 }, 'SampleCounters' );
 
 // Clears the counters ahead of the tally. "minSamples" starts at the u32 max so the first
@@ -34,7 +37,7 @@ export class PrimeSampleCountersKernel extends ComputeKernel {
 			counters: storage( new StorageBufferAttribute( 1, 1 ), sampleCountersStruct ),
 		};
 
-		const fn = wgslTagFn/* wgsl */`
+		const fn = pipelineWgslTagFn(59)`
 			fn compute() -> void {
 
 				atomicStore( &${ params.counters }.minSamples, 0xFFFFFFFFu );
@@ -42,6 +45,7 @@ export class PrimeSampleCountersKernel extends ComputeKernel {
 				atomicStore( &${ params.counters }.totalLo, 0u );
 				atomicStore( &${ params.counters }.totalHi, 0u );
 				atomicStore( &${ params.counters }.pixelCount, 0u );
+                atomicStore( &${ params.counters }.convergedMin, 0xFFFFFFFFu );
 
 			}
 		`;
@@ -58,16 +62,23 @@ export class PrimeSampleCountersKernel extends ComputeKernel {
 // instead of the whole texture.
 export class TallySampleCountsKernel extends ComputeKernel {
 
-	constructor() {
+	constructor( adaptiveSampling = false ) {
 
 		const params = {
 			globalId: globalId,
+            targets: storage(new StorageBufferAttribute(new Uint32Array(1), 1), 'uint'),
+            stageSamples: uniform(0, 'uint'),
 			counters: storage( new StorageBufferAttribute( 1, 1 ), sampleCountersStruct ),
 			sampleCountTarget: textureStore( new StorageTexture( 1, 1 ) ).toReadOnly(),
 		};
 
-		const fn = wgslTagFn/* wgsl */`
-			fn compute( globalId: vec3u ) -> void {
+        const effectiveCount = adaptiveSampling ? pipelineWgslTagFn(60)`
+            fn effectiveCount(index: u32, count: u32, stage: u32) -> u32 {
+                return select(count, stage, count >= min(${params.targets}[index], stage));
+            }
+        ` : pipelineWgslTagFn(61)`fn effectiveCount(index: u32, count: u32, stage: u32) -> u32 { return count; }`;
+		const fn = pipelineWgslTagFn(62)`
+			fn compute( stageSamples: u32, globalId: vec3u ) -> void {
 
 				let targetDimensions = textureDimensions( ${ params.sampleCountTarget } );
 				if ( globalId.x >= targetDimensions.x || globalId.y >= targetDimensions.y ) {
@@ -87,6 +98,7 @@ export class TallySampleCountsKernel extends ComputeKernel {
 				let samples = combinedField & ${ SAMPLE_COUNT_MASK }u;
 
 				atomicMin( &${ params.counters }.minSamples, samples );
+                atomicMin(&${params.counters}.convergedMin, ${effectiveCount}(globalId.y * targetDimensions.x + globalId.x, samples, stageSamples));
 				atomicMax( &${ params.counters }.maxSamples, samples );
 				atomicAdd( &${ params.counters }.pixelCount, 1u );
 

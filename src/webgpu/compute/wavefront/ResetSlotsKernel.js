@@ -1,3 +1,6 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
+import { bindPipelineShader } from './pipeline-shader.js';
+import { createPathStateAccessors } from './path-state.js';
 import { StorageBufferAttribute } from 'three/webgpu';
 import { uniform, storage, globalId } from 'three/tsl';
 import { ComputeKernel } from '../ComputeKernel.js';
@@ -10,10 +13,10 @@ import { rayDataStruct, pixelQueueStruct } from './structs.js';
 // frames, so nothing else touches the queue meanwhile.
 export class ResetSlotsKernel extends ComputeKernel {
 
-	constructor( ) {
+	constructor(soa = false, shaderList) {
 
 		const params = {
-			rayDataStorage: storage( new StorageBufferAttribute( 1, 1 ), rayDataStruct ),
+			rayDataStorage: storage( new StorageBufferAttribute( 1, 1 ), soa ? 'uint' : rayDataStruct ),
 			pixelQueue: storage( new StorageBufferAttribute( 1, 1 ), pixelQueueStruct ),
 			start: uniform( 0, 'uint' ),
 			end: uniform( 0, 'uint' ),
@@ -21,10 +24,11 @@ export class ResetSlotsKernel extends ComputeKernel {
 			globalId: globalId,
 		};
 
-		const fn = wgslTagFn/* wgsl */`
+        const path = createPathStateAccessors(params.rayDataStorage, soa);
+		const fn = (shaderList === undefined ? pipelineWgslTagFn(84)`
 			fn compute( start: u32, end: u32, addingSlots: u32, globalId: vec3u ) -> void {
 
-				let rayDataStorage = &${ params.rayDataStorage };
+				
 				let pixelQueue = &${ params.pixelQueue };
 
 				let index = start + globalId.x;
@@ -38,24 +42,24 @@ export class ResetSlotsKernel extends ComputeKernel {
 
 					// slots being removed hand their pixel back before the pool is discarded
 					let queueIndex = atomicAdd( &pixelQueue.elementCount, 1u );
-					atomicStore( &pixelQueue.elements[ queueIndex ], rayDataStorage[ index ].pixelIndex );
+					atomicStore( &pixelQueue.elements[ queueIndex ], ${path.read.pixelIndex}(index) );
 
 				} else {
 
 					// the pool never exceeds the pixel count, so the queue holds enough for every new slot
 					let previousCount = atomicSub( &pixelQueue.elementCount, 1u );
-					rayDataStorage[ index ].pixelIndex = atomicLoad( &pixelQueue.elements[ previousCount - 1u ] );
-					rayDataStorage[ index ].resultColor = vec4f( 0.0 );
-					rayDataStorage[ index ].throughputColor = vec3f( 0.0 );
-					rayDataStorage[ index ].objectIndex = - 1;
-					rayDataStorage[ index ].alphaDepth = 0u;
-					rayDataStorage[ index ].rayIntersectionIndex = - 1;
-					rayDataStorage[ index ].shadowRayIntersectionIndex = - 1;
+					${path.write.pixelIndex}(index, atomicLoad( &pixelQueue.elements[ previousCount - 1u ] ));
+					${path.write.resultColor}(index, vec4f( 0.0 ));
+					${path.write.throughputColor}(index, vec3f( 0.0 ));
+					${path.write.objectIndex}(index, - 1);
+					${path.write.alphaDepth}(index, 0u);
+					${path.write.rayIntersectionIndex}(index, - 1);
+					${path.write.shadowRayIntersectionIndex}(index, - 1);
 
 				}
 
 			}
-		`;
+		` : bindPipelineShader(shaderList.resetSlots, { pixelQueue: params.pixelQueue, readPixelIndex: path.read.pixelIndex, writePixelIndex: path.write.pixelIndex, writeResultColor: path.write.resultColor, writeThroughputColor: path.write.throughputColor, writeObjectIndex: path.write.objectIndex, writeAlphaDepth: path.write.alphaDepth, writeRayIntersectionIndex: path.write.rayIntersectionIndex, writeShadowRayIntersectionIndex: path.write.shadowRayIntersectionIndex }));
 
 		super( fn( params ) );
 

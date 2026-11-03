@@ -1,3 +1,5 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
+import { bindPipelineShader } from './pipeline-shader.js';
 import { StorageBufferAttribute } from 'three/webgpu';
 import { ComputeKernel } from '../ComputeKernel.js';
 import { storage, globalId } from 'three/tsl';
@@ -10,7 +12,7 @@ import { rayQueueStruct, intersectionResultStruct } from './structs.js';
 // hit distance against the light distance.
 export class TraceShadowRayKernel extends ComputeKernel {
 
-	constructor( ) {
+	constructor(shaderList) {
 
 		const params = {
 			bvhData: { value: null },
@@ -24,7 +26,7 @@ export class TraceShadowRayKernel extends ComputeKernel {
 		const raycastOutput = proxy( 'bvhData.value.fns.raycastFirstHit.outputType', params );
 		const raycastShadowFn = proxy( 'bvhData.value.fns.raycastShadow', params );
 
-		const fn = wgslTagFn /* wgsl */`
+		const fn = (shaderList === undefined ? pipelineWgslTagFn(86)`
 
 			fn compute( globalId: vec3u ) -> void {
 
@@ -58,7 +60,7 @@ export class TraceShadowRayKernel extends ComputeKernel {
 				shadowRayIntersectionsStorage[ index ].forwardBlocked = u32( hitResult.forwardBlocked );
 
 			}
-		`;
+		` : bindPipelineShader(shaderList.traceShadowRay, { shadowRayQueue: params.shadowRayQueue, shadowRayIntersectionsStorage: params.shadowRayIntersectionsStorage, rngInit: rngInit, raycastOutput: raycastOutput, raycastShadowFn: raycastShadowFn }));
 
 		super( fn( params ) );
 

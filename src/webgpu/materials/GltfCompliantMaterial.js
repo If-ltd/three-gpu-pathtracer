@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { float } from 'three/tsl';
 import { wgslTagFn } from 'three-mesh-bvh/webgpu';
 import { PathtracingMaterial } from './PathtracingMaterial.js';
@@ -50,14 +51,15 @@ export class GltfCompliantMaterial extends PathtracingMaterial {
 
 	getBsdfNode() {
 
-		this._bsdfEvalFunc = wgslTagFn/* wgsl */`
+		this._bsdfEvalFunc = pipelineWgslTagFn(90)`
 
 			// The material is organized as one scoped block per lobe in cascade order - clearcoat,
 			// sheen, transmission, specular, diffuse - each accumulating into a shared result and
 			// guarding its own hemisphere.
 			// TODO: energy only cascades downward through front faces, so the layers are always traversed
 			// outside-in and cannot reflect energy back into the glass from below.
-			fn bsdfEval( ctx: ${ bxdfContextStruct }, surf: ${ surfaceRecordStruct } ) -> vec3f {
+			fn bsdfEval( ctx: ${ bxdfContextStruct }, surf: ${ surfaceRecordStruct }, diffuseCoefficient: ptr<function, vec3f> ) -> vec3f {
+                *diffuseCoefficient = vec3f(0.0);
 
 				let NdotV = ctx.V.z;
 				let NdotL = ctx.L.z;
@@ -246,6 +248,9 @@ export class GltfCompliantMaterial extends PathtracingMaterial {
 					let diffuse = ( 1.0 - surf.transmission ) * reflection;
 
 					result += attenuation * diffuse;
+                    var unitDiffuseSurface = surf; unitDiffuseSurface.color = vec3f(1.0);
+                    *diffuseCoefficient = attenuation * (1.0 - surf.transmission)
+                        * ${ this.diffuseBrdf }(NdotV, NdotL, diffuseVdotH, unitDiffuseSurface);
 
 				}
 
@@ -257,7 +262,7 @@ export class GltfCompliantMaterial extends PathtracingMaterial {
 
 		const bsdfEvalPdfFn = this.getBsdfEvalPdfNode();
 
-		return wgslTagFn/* wgsl */`
+		return pipelineWgslTagFn(91)`
 
 			fn bsdfSample( worldWo: vec3f, surf: ${ surfaceRecordStruct } ) -> ${ scatterRecordStruct } {
 
@@ -464,7 +469,7 @@ export class GltfCompliantMaterial extends PathtracingMaterial {
 
 		const bsdfEvalFunc = this._bsdfEvalFunc;
 
-		this._bsdfEvalPdfNode = wgslTagFn/* wgsl */`
+		this._bsdfEvalPdfNode = pipelineWgslTagFn(92)`
 
 			fn bsdfEvalPdf( worldWo: vec3f, worldWi: vec3f, surf: ${ surfaceRecordStruct } ) -> ${ scatterRecordStruct } {
 
@@ -590,7 +595,9 @@ export class GltfCompliantMaterial extends PathtracingMaterial {
 				ctx.VdotH = saturate( dot( wo, wh ) );
 
 				// evaluate the bsdf for the direction
-				result.color = ${ bsdfEvalFunc }( ctx, surf ) * abs( wi.z );
+				var diffuseCoefficient = vec3f(0.0);
+                result.color = ${ bsdfEvalFunc }( ctx, surf, &diffuseCoefficient ) * abs( wi.z );
+                result.diffuseCoefficient = diffuseCoefficient * abs(wi.z);
 
 				// a direction crossing below the surface enters or leaves the volume
 				result.isTransmissive = isTransmission && dot( worldWi, surf.faceNormal ) < 0.0;

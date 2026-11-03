@@ -107,3 +107,4 @@ dist
 example/dev-bundle
 .vscode/
 screenshots/current/
+/release-assets/

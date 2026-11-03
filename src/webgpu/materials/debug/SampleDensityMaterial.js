@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { MeshBasicNodeMaterial, NoBlending, StorageTexture } from 'three/webgpu';
 import { uv, varying, texture, uniform } from 'three/tsl';
 import { wgslTagFn } from 'three-mesh-bvh/webgpu';
@@ -35,7 +36,7 @@ export class SampleDensityMaterial extends MeshBasicNodeMaterial {
 		this._minUniform = uniform( 0 );
 		this._maxUniform = uniform( 1 );
 
-		const sampleDensity = wgslTagFn/* wgsl */`
+		const sampleDensity = pipelineWgslTagFn(103)`
 			fn sampleDensity( tex: texture_2d<u32>, coord: vec2f, minCount: f32, maxCount: f32 ) -> vec4f {
 
 				let dims = vec2f( textureDimensions( tex, 0 ) );

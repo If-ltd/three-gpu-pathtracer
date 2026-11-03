@@ -1,3 +1,4 @@
+import { pipelineWgslFn } from 'three-mesh-bvh/webgpu';
 import { wgslFn } from 'three/tsl';
 import { constants, lobeWeightsStruct } from './structs.wgsl.js';
 import { disneyFresnelFunc, iorToF0Func, schlickFresnelFunc } from './utils.wgsl.js';
@@ -10,184 +11,27 @@ Vectors above are assumed to be in tangent space. i.e. +z is along macronormal o
 eta    : Greek character used to denote the "ratio of ior"
 */
 
-export const sampleSphereFunc = wgslFn( /* wgsl */ `
-
-	fn sampleSphere( uv: vec2f ) -> vec3f {
-
-		let u = ( uv.x - 0.5 ) * 2.0;
-		let t = uv.y * PI * 2.0;
-		let f = sqrt( 1.0 - u * u );
-
-		return vec3f( f * cos( t ), f * sin( t ), u );
-
-	}
-
-`, [ constants ] );
+export const sampleSphereFunc = pipelineWgslFn(196, ["\n\n\tfn sampleSphere( uv: vec2f ) -> vec3f {\n\n\t\tlet u = ( uv.x - 0.5 ) * 2.0;\n\t\tlet t = uv.y * PI * 2.0;\n\t\tlet f = sqrt( 1.0 - u * u );\n\n\t\treturn vec3f( f * cos( t ), f * sin( t ), u );\n\n\t}\n\n"], [], [ constants ]);
 
 // TODO: Investigate sampling directly in tagent space?
 // See 16.6.1 in https://www.realtimerendering.com/raytracinggems/unofficial_RayTracingGems_v1.9.pdf
-export const diffuseDirectionFunc = wgslFn( /* wgsl */ `
+export const diffuseDirectionFunc = pipelineWgslFn(197, ["\n\n\tfn diffuseDirection( wo: vec3f, uv: vec2f ) -> vec3f {\n\n\t\tvar lightDirection = sampleSphere( uv );\n\t\tlightDirection.z += 1.0;\n\t\tlightDirection = normalize( lightDirection );\n\n\t\treturn lightDirection;\n\n\t}\n\n"], [], [ sampleSphereFunc ]);
 
-	fn diffuseDirection( wo: vec3f, uv: vec2f ) -> vec3f {
+export const getLobeWeightsFunc = pipelineWgslFn(198, ["\n\n\tfn getLobeWeights( wo: vec3f, wi: vec3f, woClearcoat: vec3f, wh: vec3f, clearcoatIor: f32, surf: SurfaceRecord ) -> LobeWeights {\n\n\t\tvar weights: LobeWeights;\n\t\tvar remaining = 1.0;\n\n\t\tlet clearcoatF0 = iorToF0( clearcoatIor );\n\t\tlet clearcoatFresnel = schlickFresnel( saturate( woClearcoat.z ), clearcoatF0 );\n\t\tweights.clearcoat = surf.clearcoat * clearcoatFresnel;\n\t\tremaining -= weights.clearcoat;\n\n\t\t// this specular lobe only handles the opaque portion of the specular\n\t\tlet fEstimate = disneyFresnel( wo, wi, wh, surf.f0, surf.eta, surf.metalness );\n\t\tweights.specular = remaining * ( surf.metalness + ( 1.0 - surf.metalness ) * ( 1.0 - surf.transmission ) * fEstimate );\n\t\tremaining -= weights.specular;\n\n\t\t// the transmission lobe covers both the reflected and refracted halves of the transmissive portion\n\t\tweights.transmission = remaining * surf.transmission;\n\t\tremaining -= weights.transmission;\n\n\t\tweights.diffuse = remaining;\n\n\t\treturn weights;\n\n\t}\n\n"], [], [ disneyFresnelFunc, schlickFresnelFunc, iorToF0Func, lobeWeightsStruct, constants ]);
 
-		var lightDirection = sampleSphere( uv );
-		lightDirection.z += 1.0;
-		lightDirection = normalize( lightDirection );
+export const equirectDirectionToUvFn = pipelineWgslFn(199, ["\n\n\tfn equirectDirectionToUv(direction: vec3f) -> vec2f {\n\n\t\t// from Spherical.setFromCartesianCoords\n\t\tvar uv = vec2f( atan2( direction.z, direction.x ), acos( direction.y ) );\n\t\tuv /= vec2f( 2.0 * PI, PI );\n\n\t\t// apply adjustments to get values in range [0, 1] and y right side up\n\t\tuv.x += 0.5;\n\t\tuv.y = 1.0 - uv.y;\n\t\treturn uv;\n\n\t}\n\n"], [], []);
 
-		return lightDirection;
-
-	}
-
-`, [ sampleSphereFunc ] );
-
-export const getLobeWeightsFunc = wgslFn( /* wgsl */ `
-
-	fn getLobeWeights( wo: vec3f, wi: vec3f, woClearcoat: vec3f, wh: vec3f, clearcoatIor: f32, surf: SurfaceRecord ) -> LobeWeights {
-
-		var weights: LobeWeights;
-		var remaining = 1.0;
-
-		let clearcoatF0 = iorToF0( clearcoatIor );
-		let clearcoatFresnel = schlickFresnel( saturate( woClearcoat.z ), clearcoatF0 );
-		weights.clearcoat = surf.clearcoat * clearcoatFresnel;
-		remaining -= weights.clearcoat;
-
-		// this specular lobe only handles the opaque portion of the specular
-		let fEstimate = disneyFresnel( wo, wi, wh, surf.f0, surf.eta, surf.metalness );
-		weights.specular = remaining * ( surf.metalness + ( 1.0 - surf.metalness ) * ( 1.0 - surf.transmission ) * fEstimate );
-		remaining -= weights.specular;
-
-		// the transmission lobe covers both the reflected and refracted halves of the transmissive portion
-		weights.transmission = remaining * surf.transmission;
-		remaining -= weights.transmission;
-
-		weights.diffuse = remaining;
-
-		return weights;
-
-	}
-
-`, [ disneyFresnelFunc, schlickFresnelFunc, iorToF0Func, lobeWeightsStruct, constants ] );
-
-export const equirectDirectionToUvFn = wgslFn( /* wgsl */`
-
-	fn equirectDirectionToUv(direction: vec3f) -> vec2f {
-
-		// from Spherical.setFromCartesianCoords
-		var uv = vec2f( atan2( direction.z, direction.x ), acos( direction.y ) );
-		uv /= vec2f( 2.0 * PI, PI );
-
-		// apply adjustments to get values in range [0, 1] and y right side up
-		uv.x += 0.5;
-		uv.y = 1.0 - uv.y;
-		return uv;
-
-	}
-
-` );
-
-export const sampleHemisphereFn = wgslFn( /* wgsl */ `
-
-	fn sampleHemisphere( n: vec3f, uv: vec2f ) -> vec3f {
-
-		// https://www.rorydriscoll.com/2009/01/07/better-sampling/
-		// https://graphics.pixar.com/library/OrthonormalB/paper.pdf
-		let sign = select( sign( n.z ), 1.0, n.z == 0.0 );
-		let a = - 1.0 / ( sign + n.z );
-		let b = n.x * n.y * a;
-		let b1 = vec3( 1.0 + sign * n.x * n.x * a, sign * b, - sign * n.x );
-		let b2 = vec3( b, sign + n.y * n.y * a, - n.y );
-
-		let r = sqrt( uv.x );
-		let theta = 2.0 * PI * uv.y;
-		let x = r * cos( theta );
-		let y = r * sin( theta );
-		return x * b1 + y * b2 + sqrt( 1.0 - uv.x ) * n;
-
-	}
-
-`, [ constants ] );
+export const sampleHemisphereFn = pipelineWgslFn(200, ["\n\n\tfn sampleHemisphere( n: vec3f, uv: vec2f ) -> vec3f {\n\n\t\t// https://www.rorydriscoll.com/2009/01/07/better-sampling/\n\t\t// https://graphics.pixar.com/library/OrthonormalB/paper.pdf\n\t\tlet sign = select( sign( n.z ), 1.0, n.z == 0.0 );\n\t\tlet a = - 1.0 / ( sign + n.z );\n\t\tlet b = n.x * n.y * a;\n\t\tlet b1 = vec3( 1.0 + sign * n.x * n.x * a, sign * b, - sign * n.x );\n\t\tlet b2 = vec3( b, sign + n.y * n.y * a, - n.y );\n\n\t\tlet r = sqrt( uv.x );\n\t\tlet theta = 2.0 * PI * uv.y;\n\t\tlet x = r * cos( theta );\n\t\tlet y = r * sin( theta );\n\t\treturn x * b1 + y * b2 + sqrt( 1.0 - uv.x ) * n;\n\n\t}\n\n"], [], [ constants ]);
 
 // power heuristic for multiple importance sampling
-export const misHeuristicFn = wgslFn( /* wgsl */ `
+export const misHeuristicFn = pipelineWgslFn(201, ["\n\n\tfn misHeuristic( a: f32, b: f32 ) -> f32 {\n\n\t\tlet aa = a * a;\n\t\tlet bb = b * b;\n\t\treturn aa / ( aa + bb );\n\n\t}\n\n"], [], []);
 
-	fn misHeuristic( a: f32, b: f32 ) -> f32 {
-
-		let aa = a * a;
-		let bb = b * b;
-		return aa / ( aa + bb );
-
-	}
-
-` );
-
-export const luminanceFn = wgslFn( /* wgsl */ `
-
-	fn luminance( color: vec3f ) -> f32 {
-
-		return dot( color, vec3f( 0.2126, 0.7152, 0.0722 ) );
-
-	}
-
-` );
+export const luminanceFn = pipelineWgslFn(202, ["\n\n\tfn luminance( color: vec3f ) -> f32 {\n\n\t\treturn dot( color, vec3f( 0.2126, 0.7152, 0.0722 ) );\n\n\t}\n\n"], [], []);
 
 // inverse of equirectDirectionToUv: map an equirect uv back to a direction
-export const equirectUvToDirectionFn = wgslFn( /* wgsl */ `
-
-	fn equirectUvToDirection( uvIn: vec2f ) -> vec3f {
-
-		// undo the adjustments applied in equirectDirectionToUv
-		var uv = uvIn;
-		uv.x -= 0.5;
-		uv.y = 1.0 - uv.y;
-
-		let theta = uv.x * 2.0 * PI;
-		let phi = uv.y * PI;
-		let sinPhi = sin( phi );
-
-		return vec3f( sinPhi * cos( theta ), cos( phi ), sinPhi * sin( theta ) );
-
-	}
-
-`, [ constants ] );
+export const equirectUvToDirectionFn = pipelineWgslFn(203, ["\n\n\tfn equirectUvToDirection( uvIn: vec2f ) -> vec3f {\n\n\t\t// undo the adjustments applied in equirectDirectionToUv\n\t\tvar uv = uvIn;\n\t\tuv.x -= 0.5;\n\t\tuv.y = 1.0 - uv.y;\n\n\t\tlet theta = uv.x * 2.0 * PI;\n\t\tlet phi = uv.y * PI;\n\t\tlet sinPhi = sin( phi );\n\n\t\treturn vec3f( sinPhi * cos( theta ), cos( phi ), sinPhi * sin( theta ) );\n\n\t}\n\n"], [], [ constants ]);
 
 // solid-angle pdf factor for the equirect parameterization ( accounts for pole compression )
-export const equirectDirectionPdfFn = wgslFn( /* wgsl */ `
+export const equirectDirectionPdfFn = pipelineWgslFn(204, ["\n\n\tfn equirectDirectionPdf( direction: vec3f ) -> f32 {\n\n\t\tlet uv = equirectDirectionToUv( direction );\n\t\tlet theta = uv.y * PI;\n\t\tlet sinTheta = sin( theta );\n\t\tif ( sinTheta == 0.0 ) {\n\n\t\t\treturn 0.0;\n\n\t\t}\n\n\t\treturn 1.0 / ( 2.0 * PI * PI * sinTheta );\n\n\t}\n\n"], [], [ constants, equirectDirectionToUvFn ]);
 
-	fn equirectDirectionPdf( direction: vec3f ) -> f32 {
-
-		let uv = equirectDirectionToUv( direction );
-		let theta = uv.y * PI;
-		let sinTheta = sin( theta );
-		if ( sinTheta == 0.0 ) {
-
-			return 0.0;
-
-		}
-
-		return 1.0 / ( 2.0 * PI * PI * sinTheta );
-
-	}
-
-`, [ constants, equirectDirectionToUvFn ] );
-
-export const weightedAlphaBlendFn = wgslFn( /* wgsl */`
-
-	fn weightedAlphaBlend( prevColor: vec4f, newColor: vec4f, weight: f32 ) -> vec4f {
-
-		let invWeight = 1.0 - weight;
-		let totalAlpha = prevColor.a * invWeight + newColor.a * weight;
-		var blendedColor = vec4f( 0 );
-		if ( totalAlpha != 0.0 ) {
-
-			let prevContrib = prevColor.rgb * invWeight * prevColor.a / totalAlpha;
-			let resContrib = newColor.rgb * weight * newColor.a / totalAlpha;
-			blendedColor = vec4f( prevContrib + resContrib, totalAlpha );
-
-		}
-
-		return blendedColor;
-
-	}
-
-` );
+export const weightedAlphaBlendFn = pipelineWgslFn(205, ["\n\n\tfn weightedAlphaBlend( prevColor: vec4f, newColor: vec4f, weight: f32 ) -> vec4f {\n\n\t\tlet invWeight = 1.0 - weight;\n\t\tlet totalAlpha = prevColor.a * invWeight + newColor.a * weight;\n\t\tvar blendedColor = vec4f( 0 );\n\t\tif ( totalAlpha != 0.0 ) {\n\n\t\t\tlet prevContrib = prevColor.rgb * invWeight * prevColor.a / totalAlpha;\n\t\t\tlet resContrib = newColor.rgb * weight * newColor.a / totalAlpha;\n\t\t\tblendedColor = vec4f( prevContrib + resContrib, totalAlpha );\n\n\t\t}\n\n\t\treturn blendedColor;\n\n\t}\n\n"], [], []);

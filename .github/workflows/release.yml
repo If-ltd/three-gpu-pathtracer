@@ -1,0 +1,21 @@
+name: Publish internal rendering artifact
+on:
+  push:
+    tags: ['v*-moda.*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node .github/scripts/pack-release.mjs
+      - name: Publish the tagged artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --prerelease --latest=false \
+            --notes "Internal rendering artifact from $GITHUB_SHA"

@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { Matrix4 } from 'three';
 import { uniform, PI } from 'three/tsl';
 import { wgslTagFn, rayStruct } from 'three-mesh-bvh/webgpu';
@@ -6,7 +7,7 @@ import { EquirectCamera } from '../../objects/EquirectCamera.js';
 EquirectCamera.prototype.getCameraRayFn = function getCameraRayFn() {
 
 	const cameraToWorld = uniform( new Matrix4() );
-	const fn = wgslTagFn/* wgsl */`
+	const fn = pipelineWgslTagFn(235)`
 		fn getCameraRay( uv: vec2f, resolution: vec2f, ray: ptr<function, ${ rayStruct }> ) -> bool {
 
 			// screen uv to spherical direction, matching three.js' equirect orientation

@@ -1,3 +1,4 @@
+import { pipelineWgslFn, pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { MeshBasicNodeMaterial, NoToneMapping, StorageTexture } from 'three/webgpu';
 import { uv, varying, texture, vec4, toneMapping, uniform, wgslFn } from 'three/tsl';
 import { wgslTagFn } from 'three-mesh-bvh/webgpu';
@@ -5,33 +6,7 @@ import { wgslTagFn } from 'three-mesh-bvh/webgpu';
 // TODO: we could fall back to hardware-based filtering if available but it has to be specifically
 // requested and available on the renderer which we don't have access to immediately. It's possible this
 // can be detected during build time via a custom node to adjust the sample approach used?
-const sampleTexelFn = wgslFn( /* wgsl */`
-	fn sampleTexel( tex: texture_2d<f32>, coord: vec2f ) -> vec4f {
-
-		// Manual bilinear filtering using textureLoad to support filterable float32 textures
-		// on all devices
-		let size = vec2f( textureDimensions( tex, 0 ) );
-
-		// the path tracer stores its color rows top down
-		let pxCoord = vec2f( coord.x, 1.0 - coord.y ) * size - 0.5;
-		let px = vec2i( floor( pxCoord ) );
-		let fr = fract( pxCoord );
-
-		// get the four sibling samples
-		let s00 = textureLoad( tex, clamp( px,                 vec2i( 0 ), vec2i( size ) - 1 ), 0 );
-		let s10 = textureLoad( tex, clamp( px + vec2i( 1, 0 ), vec2i( 0 ), vec2i( size ) - 1 ), 0 );
-		let s01 = textureLoad( tex, clamp( px + vec2i( 0, 1 ), vec2i( 0 ), vec2i( size ) - 1 ), 0 );
-		let s11 = textureLoad( tex, clamp( px + vec2i( 1, 1 ), vec2i( 0 ), vec2i( size ) - 1 ), 0 );
-
-		// interpolate on the x axis
-		let y0 = mix( s00, s10, fr.x );
-		let y1 = mix( s01, s11, fr.x );
-
-		// then y
-		return mix( y0, y1, fr.y );
-
-	}
-` );
+const sampleTexelFn = pipelineWgslFn(100, ["\n\tfn sampleTexel( tex: texture_2d<f32>, coord: vec2f ) -> vec4f {\n\n\t\t// Manual bilinear filtering using textureLoad to support filterable float32 textures\n\t\t// on all devices\n\t\tlet size = vec2f( textureDimensions( tex, 0 ) );\n\n\t\t// the path tracer stores its color rows top down\n\t\tlet pxCoord = vec2f( coord.x, 1.0 - coord.y ) * size - 0.5;\n\t\tlet px = vec2i( floor( pxCoord ) );\n\t\tlet fr = fract( pxCoord );\n\n\t\t// get the four sibling samples\n\t\tlet s00 = textureLoad( tex, clamp( px,                 vec2i( 0 ), vec2i( size ) - 1 ), 0 );\n\t\tlet s10 = textureLoad( tex, clamp( px + vec2i( 1, 0 ), vec2i( 0 ), vec2i( size ) - 1 ), 0 );\n\t\tlet s01 = textureLoad( tex, clamp( px + vec2i( 0, 1 ), vec2i( 0 ), vec2i( size ) - 1 ), 0 );\n\t\tlet s11 = textureLoad( tex, clamp( px + vec2i( 1, 1 ), vec2i( 0 ), vec2i( size ) - 1 ), 0 );\n\n\t\t// interpolate on the x axis\n\t\tlet y0 = mix( s00, s10, fr.x );\n\t\tlet y1 = mix( s01, s11, fr.x );\n\n\t\t// then y\n\t\treturn mix( y0, y1, fr.y );\n\n\t}\n"], [], []);
 
 // Material to apply tone mapping _before_ applying alpha blending
 export class RenderToScreenNodeMaterial extends MeshBasicNodeMaterial {
@@ -112,7 +87,7 @@ export class RenderToScreenNodeMaterial extends MeshBasicNodeMaterial {
 		this._transitionUniform = transitionUniform;
 
 		// NOTE: varyings cannot be referenced directly and must be passed as arguments
-		const getFadedColorFn = wgslTagFn/* wgsl */`
+		const getFadedColorFn = pipelineWgslTagFn(101)`
 			fn fade( uv: vec2f ) -> vec4f {
 
 				if ( ${ transitionUniform } <= 0.0 ) {

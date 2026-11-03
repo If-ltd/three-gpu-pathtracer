@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { ArrayCamera, Matrix4, Vector4, WebGPUCoordinateSystem } from 'three';
 import { uniformArray, int } from 'three/tsl';
 import { ndcToCameraRay, rayStruct, wgslTagFn } from 'three-mesh-bvh/webgpu';
@@ -10,7 +11,7 @@ ArrayCamera.prototype.getCameraRayFn = function getCameraRayFn() {
 	const invViewProjectionMatrices = uniformArray( [], 'mat4' );
 	const viewports = uniformArray( [], 'vec4' );
 
-	result.fn = wgslTagFn/* wgsl */`
+	result.fn = pipelineWgslTagFn(234)`
 		fn getCameraRay( uv: vec2f, resolution: vec2f, ray: ptr<function, ${ rayStruct }> ) -> bool {
 
 			let pixel = uv * resolution;

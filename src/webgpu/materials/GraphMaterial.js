@@ -1,3 +1,4 @@
+import { pipelineWgslFn, pipelineWgslTagCode, pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { Color, SRGBColorSpace, Vector2 } from 'three';
 import { MeshBasicNodeMaterial, StorageBufferAttribute } from 'three/webgpu';
 import { globalId, storage, uniform, uv, varying, wgslFn } from 'three/tsl';
@@ -14,44 +15,7 @@ function getGraphColor( i ) {
 }
 
 // anti-aliased background with x / y axes and 1-unit markers
-const getBackgroundFunc = wgslFn( /* wgsl */`
-	fn getBackground( point: vec2f, steepness: f32 ) -> vec3f {
-
-		let pw = fwidth( point );
-		let halfWidth = pw * 0.5;
-
-		// x, y axes
-		var distToZero = smoothstep(
-			- halfWidth * 0.5,
-			halfWidth * 0.5,
-			abs( point ) - pw
-		);
-
-		// 1 unit markers
-		let modAxis = fract( abs( point + vec2f( 0.5 ) ) ) - 0.5;
-		var distToAxis = smoothstep(
-			- halfWidth,
-			halfWidth,
-			abs( modAxis ) - pw * 0.5
-		);
-
-		// if we're at a chart boundary then remove the artifacts
-		if ( abs( pw.y ) > steepness * 0.5 ) {
-
-			distToZero.y = 1.0;
-			distToAxis.y = 1.0;
-
-		}
-
-		// mix colors into a background color
-		let axisIntensity = 1.0 - min( distToZero.x, distToZero.y );
-		let markerIntensity = 1.0 - min( distToAxis.x, distToAxis.y );
-
-		let markerColor = mix( vec3f( 0.005 ), vec3f( 0.05 ), markerIntensity );
-		return mix( markerColor, vec3f( 0.2 ), axisIntensity );
-
-	}
-` );
+const getBackgroundFunc = pipelineWgslFn(93, ["\n\tfn getBackground( point: vec2f, steepness: f32 ) -> vec3f {\n\n\t\tlet pw = fwidth( point );\n\t\tlet halfWidth = pw * 0.5;\n\n\t\t// x, y axes\n\t\tvar distToZero = smoothstep(\n\t\t\t- halfWidth * 0.5,\n\t\t\thalfWidth * 0.5,\n\t\t\tabs( point ) - pw\n\t\t);\n\n\t\t// 1 unit markers\n\t\tlet modAxis = fract( abs( point + vec2f( 0.5 ) ) ) - 0.5;\n\t\tvar distToAxis = smoothstep(\n\t\t\t- halfWidth,\n\t\t\thalfWidth,\n\t\t\tabs( modAxis ) - pw * 0.5\n\t\t);\n\n\t\t// if we're at a chart boundary then remove the artifacts\n\t\tif ( abs( pw.y ) > steepness * 0.5 ) {\n\n\t\t\tdistToZero.y = 1.0;\n\t\t\tdistToAxis.y = 1.0;\n\n\t\t}\n\n\t\t// mix colors into a background color\n\t\tlet axisIntensity = 1.0 - min( distToZero.x, distToZero.y );\n\t\tlet markerIntensity = 1.0 - min( distToAxis.x, distToAxis.y );\n\n\t\tlet markerColor = mix( vec3f( 0.005 ), vec3f( 0.05 ), markerIntensity );\n\t\treturn mix( markerColor, vec3f( 0.2 ), axisIntensity );\n\n\t}\n"], [], []);
 
 // Fullscreen material that plots an arbitrary number of WGSL functions of the form
 // "fn( x: f32 ) -> f32" provided via "setGraphs", either overlaid or in stacked sections.
@@ -194,7 +158,7 @@ export class GraphMaterial extends MeshBasicNodeMaterial {
 		graphs.forEach( ( graph, i ) => {
 
 			const color = getGraphColor( i );
-			graphBody = wgslTagCode/* wgsl */`
+			graphBody = pipelineWgslTagCode(94)`
 				${ graphBody }
 
 				{
@@ -233,7 +197,7 @@ export class GraphMaterial extends MeshBasicNodeMaterial {
 
 		// the section math assumes at least one graph
 		const count = Math.max( graphs.length, 1 );
-		const graphShader = wgslTagFn/* wgsl */`
+		const graphShader = pipelineWgslTagFn(95)`
 			fn graphShader( vUv: vec2f ) -> vec4f {
 
 				var sectionCount = ${ count }.0;
@@ -287,14 +251,14 @@ export class GraphMaterial extends MeshBasicNodeMaterial {
 		let valuesBody = '';
 		graphs.forEach( ( graph, i ) => {
 
-			valuesBody = wgslTagCode/* wgsl */`
+			valuesBody = pipelineWgslTagCode(96)`
 				${ valuesBody }
 				${ valuesStorage }[ ${ i } ] = ${ graph }( x );
 			`;
 
 		} );
 
-		const valuesFn = wgslTagFn/* wgsl */`
+		const valuesFn = pipelineWgslTagFn(97)`
 			fn computeGraphValues( globalId: vec3u ) -> void {
 
 				let x = ${ _mousePoint }.x;

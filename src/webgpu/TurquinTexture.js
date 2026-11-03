@@ -1,3 +1,4 @@
+import { pipelineWgslTagFn } from 'three-mesh-bvh/webgpu';
 import { Storage3DTexture, RGBAFormat, LinearFilter, HalfFloatType, MathUtils } from 'three/webgpu';
 import { storageTexture3D, globalId, uniform, texture3D, sampler } from 'three/tsl';
 import { turquinIntegralFn } from './nodes/material.wgsl.js';
@@ -100,7 +101,7 @@ export class TurquinTexture extends Storage3DTexture {
 
 		// fns
 		// function that maps the given value from range [a0, a1] to [b0, b1]
-		const mapLinearClampedFn = wgslTagFn/* wgsl */`
+		const mapLinearClampedFn = pipelineWgslTagFn(51)`
 			fn mapLinearClamped( v: f32, a0: f32, a1: f32, b0: f32, b1: f32 ) -> f32 {
 
 				let mapped = saturate( ( v - a0 ) / ( a1 - a0 ) );
@@ -115,7 +116,7 @@ export class TurquinTexture extends Storage3DTexture {
 
 		// conductor fetch fn
 		const layerDepth = 1.0 / ( 1 + dielectricLayerCount + 2 * transmissiveLayerCount );
-		this._sampleConductorFn = wgslTagFn/* wgsl */`
+		this._sampleConductorFn = pipelineWgslTagFn(52)`
 			fn sampleConductor( cosTheta0: f32, roughness: f32 ) -> f32 {
 
 				let layer = 0.5;
@@ -126,7 +127,7 @@ export class TurquinTexture extends Storage3DTexture {
 		`;
 
 		// dielectric fetch fn - ior is clamped at the valid range
-		this._sampleDielectricFn = wgslTagFn/* wgsl */`
+		this._sampleDielectricFn = pipelineWgslTagFn(53)`
 			fn sampleDielectric( cosTheta0: f32, roughness: f32, ior: f32 ) -> f32 {
 
 				let blockStart = 1.0;
@@ -146,7 +147,7 @@ export class TurquinTexture extends Storage3DTexture {
 		// volume-incident (TIR) block. ior is clamped at the valid range
 		const enterBlockStart = 1 + dielectricLayerCount;
 		const exitBlockStart = 1 + dielectricLayerCount + transmissiveLayerCount;
-		this._sampleTransmissiveFn = wgslTagFn/* wgsl */`
+		this._sampleTransmissiveFn = pipelineWgslTagFn(54)`
 			fn sampleTransmissive( cosTheta0: f32, roughness: f32, ior: f32, entering: bool ) -> f32 {
 
 				let blockStart = select(
